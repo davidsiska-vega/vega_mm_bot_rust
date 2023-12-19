@@ -1,0 +1,17 @@
+{
+    "port": 1789,
+    "vega_grpc_url": "tcp://darling.network:3007",
+    "binance_ws_url": "wss://stream.binance.com:443/ws",
+    "vega_market": "4e9081e20e9e81f3e747d42cb0c9b8826454df01899e6027a22e771e19cc79fc",
+    "binance_market": "BTCUSDT",
+    "trade_size": 3,
+    "wallet_mnemonic_1": "word1 word2 word3 word4 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23",
+    "volume_of_notional": 50,
+    "q_lower": -10,
+    "q_upper": 10,
+    "kappa": 1.0,
+    "lambd": 1.0,
+    "phi": 2.0,
+    "submission_rate": 10,
+    "dryrun": true
+}
