@@ -5,7 +5,7 @@ Forked from [this price taking bot](https://github.com/jeremyletang/niceish_pric
 ## Good to know
 
 It so simple it will certainly lose money as it is now. 
-There areonly two ways it will not lose money. 
+There are only two cases when it will *not* lose money. 
 1. Set the `dryrun` config parameter set to `true`. In that case it won't send any transactions. 
 1. Run it against a vega testnet.
 
