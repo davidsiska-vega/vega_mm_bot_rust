@@ -17,6 +17,7 @@ mod binance_ws;
 mod strategy2;
 mod vega_store2;
 mod opt_offsets;
+mod estimate_params;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -102,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(strategy2::start(
         w1.clone(),
-        config,
+        config.clone(),
         vstore.clone(),
         rp.clone(),
     ));

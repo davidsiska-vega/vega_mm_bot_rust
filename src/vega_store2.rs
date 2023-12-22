@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use log::{error, info};
 use lru::LruCache;
 use std::collections::HashMap;
@@ -21,11 +22,11 @@ use vega_protobufs::{
 
 #[derive(Clone)]
 pub struct TradeStat {
-    pub timestamp: i64,
-    pub price: String,
+    pub timestamp: u64,
+    pub price: f64,
     pub size: u64,
-    pub block_best_bid: Option<String>,
-    pub block_best_ask: Option<String>,
+    pub block_best_bid: f64,
+    pub block_best_ask: f64,
 }
 
 pub struct VegaStore {
@@ -125,9 +126,16 @@ impl VegaStore {
 
     pub fn update_trades(&mut self, md: &MarketData) {
         for t in self.trades.iter_mut() {
-            if t.timestamp == md.timestamp {
-                t.block_best_ask = Some(md.best_offer_price.clone());
-                t.block_best_bid = Some(md.best_bid_price.clone());
+            if t.timestamp == md.timestamp as u64 {
+                match md.best_offer_price.clone().to_string().parse::<f64>() {
+                    Ok(v) => {t.block_best_ask = v;}
+                    Err(e) => {continue;}
+                }
+
+                match md.best_bid_price.clone().to_string().parse::<f64>() {
+                    Ok(v) => {t.block_best_bid = v;}
+                    Err(e) => {continue;}
+                }    
             }
         }
     }
@@ -144,18 +152,57 @@ impl VegaStore {
             ),
             None => (None, None),
         };
+
+        let mut best_bid_f = 0.0;
+        match best_bid.clone().unwrap_or_default().parse::<f64>() {
+            Ok(v) => {best_bid_f = v;}
+            Err(e) => {return;}
+        }
+
+        let mut best_ask_f = 0.0;
+        match best_ask.clone().unwrap_or_default().parse::<f64>() {
+            Ok(v) => {best_ask_f = v;}
+            Err(e) => {return;}
+        }
+
+        let mut price_f = 0.0;
+        match trade.price.clone().to_string().parse::<f64>() {
+            Ok(v) => {price_f = v;}
+            Err(e) => {return;}
+        }
+
+        info!("TRADE with time: {}, price: {}, size: {}, aggressor: {}, best_bid: {}, best_ask: {}", 
+                convert_nanos_since_unix_epoch_datetime(trade.timestamp as u64), 
+                price_f, 
+                trade.size, 
+                trade.aggressor,
+                best_bid_f, 
+                best_ask_f);
+
         self.trades.push(TradeStat {
-            timestamp: trade.timestamp,
-            price: trade.price.clone(),
+            timestamp: trade.timestamp as u64,
+            price: price_f,
             size: trade.size,
-            block_best_ask: best_ask,
-            block_best_bid: best_bid,
+            block_best_ask: best_ask_f,
+            block_best_bid: best_bid_f,
         });
     }
 
     pub fn get_trades(&self) -> Vec<TradeStat> {
         return self.trades.clone();
     }
+
+    pub fn prune_trades_older_than(&mut self, timestamp: u64) {
+        let len_before = self.trades.len();
+        info!("pruning trades older than {}; trades stored before pruning {}, after {}", 
+            convert_nanos_since_unix_epoch_datetime(timestamp as u64), 
+            len_before, 
+            self.trades.len());
+        self.trades.retain(|t| t.timestamp >= timestamp);
+    }
+    
+
+    
 }
 
 pub fn update_forever(
@@ -259,10 +306,10 @@ async fn update_trades_forever(
     market: String,
     pubkey: String,
 ) {
-    info!("starting positions stream for party: {}...", &*pubkey);
+    info!("Starting trades stream.");
     let mut stream = match clt
         .observe_trades(ObserveTradesRequest {
-            party_ids: vec![pubkey],
+            party_ids: vec![],
             market_ids: vec![market],
         })
         .await
@@ -279,11 +326,29 @@ async fn update_trades_forever(
                 }
             }
             Err(e) => {
-                error!("could not load position: {} - {}", e, e.message());
+                error!("could not load trade: {} - {}", e, e.message());
             }
         }
     }
 }
+
+
+pub fn convert_nanos_since_unix_epoch_datetime(t: u64) -> DateTime<Local> {
+    // Convert nanoseconds to seconds and create a NaiveDateTime
+    let seconds = t / 1_000_000_000;
+    let nanoseconds = t % 1_000_000_000;
+
+    let naive_datetime = NaiveDateTime::from_timestamp(seconds as i64, nanoseconds as u32);
+
+    // Convert NaiveDateTime to DateTime in the UTC timezone
+    let utc_datetime: DateTime<Utc> = DateTime::from_utc(naive_datetime, Utc);
+
+    // Convert UTC DateTime to DateTime in the local timezone
+    let local_datetime: DateTime<Local> = utc_datetime.with_timezone(&Local);
+       
+    return local_datetime;
+}
+
 
 #[derive(Debug)]
 pub enum Error {

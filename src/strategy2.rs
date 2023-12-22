@@ -7,6 +7,8 @@ use num_traits::cast::FromPrimitive;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time;
+
+
 use vega_crypto::Transact;
 use vega_protobufs::vega::{
     commands::v1::{
@@ -18,8 +20,11 @@ use vega_protobufs::vega::{
 };
 use vega_protobufs::vega::{Asset, Position};
 
-use crate::{opt_offsets, Config};
 use crate::{binance_ws::RefPrice, vega_store2::VegaStore};
+use crate::{Config, vega_store2};
+use crate::opt_offsets;
+use crate::estimate_params::{self, estimate_lambda2, estimate_kappa};
+
 
 
 pub async fn start(
@@ -139,11 +144,37 @@ async fn run_strategy(
         None => 0,
     }; 
 
-    
 
     info!("Position size: {}", w1_position_size);
 
-    let (buy_deltas, sell_deltas) = opt_offsets::calculate_offsets(c.q_lower, c.q_upper, c.kappa, c.lambd, c.phi);
+    let mut lambd = c.lambd;
+    let mut kappa = c.kappa;
+    if !store.lock().unwrap().get_trades().is_empty() {
+        //let last_trade_timestamp = store.lock().unwrap().get_trades().last().unwrap().timestamp;
+        //info!("Trying trade store stuff...{}", last_trade_timestamp);
+        
+        // Get the current time
+        let current_time = SystemTime::now();
+
+        // Get the duration since the UNIX epoch
+        let duration_since_epoch = current_time.duration_since(UNIX_EPOCH).expect("Time went backwards");
+
+        // Get the duration in nanoseconds
+        let current_t = duration_since_epoch.as_nanos() as u64;
+        
+        
+
+        let estimation_interval = Duration::from_secs(30*60).as_nanos() as u64;
+
+        store.lock().unwrap().prune_trades_older_than(current_t - estimation_interval);
+
+        let trades = store.lock().unwrap().get_trades().clone();
+        lambd = estimate_lambda2(lambd, current_t, estimation_interval, &trades);
+        kappa = estimate_kappa(kappa, current_t, estimation_interval, &trades, d.price_factor);
+        info!("Lambda estimate: {}, Kappa estimate: {}", lambd, kappa);
+    }
+
+    let (buy_deltas, sell_deltas) = opt_offsets::calculate_offsets(c.q_lower, c.q_upper, kappa, lambd, c.phi);
     let (ask_offset, submit_asks, bid_offset, submit_bids) =
             opt_offsets::offsets_from_position(buy_deltas, sell_deltas, c.q_lower, c.q_upper, w1_position_size);
 
@@ -172,11 +203,13 @@ async fn run_strategy(
     let batch_w1 = Command::BatchMarketInstructions(
         get_batch(
             c.vega_market.clone(),
-            BigUint::from(0 as u64),
-            BigUint::from(used_bid),
+            ((used_ask + used_bid)/2) as i64,
+            used_bid as i64,
+            vega_best_bid as i64,
             bid_offset,
             submit_bids,
-            BigUint::from(used_ask),
+            used_ask as i64,
+            vega_best_ask as i64,
             ask_offset,
             submit_asks,
             order_size,
@@ -198,11 +231,13 @@ async fn run_strategy(
 
 fn get_batch(
     market_id: String,
-    mid_price: BigUint,
-    best_bid: BigUint,
+    mid_price: i64,
+    best_bid: i64,
+    vega_best_bid: i64, 
     bid_offset: f64,
     submit_bids: bool,
-    best_ask: BigUint,
+    best_ask: i64,
+    vega_best_ask: i64,
     ask_offset: f64,
     submit_asks: bool,
     mut size: i64,
@@ -235,11 +270,12 @@ fn get_batch(
     // lets setup the buy side orders
     if submit_bids {
         let side = Side::Buy;
-        let offset = f64::max(0.0 as f64,bid_offset * d.price_factor) as u64;
+        //let offset = f64::max(0.0 as f64,bid_offset * d.price_factor) as u64;
+        let offset = (bid_offset * d.price_factor) as i64;
         for i in 0..=num_levels-1 {
-            let price = best_bid.clone() - offset - i * step;
+            let price = (mid_price - offset - ((i * step) as i64)).min(vega_best_ask - 1);
             let price_f = price.to_f64().unwrap() / d.price_factor;
-            info!("order: buy {}@{}", size, price_f);
+            info!("mid: {}, order: buy {}@{}", (mid_price.clone().to_f64().unwrap() / d.price_factor), size, price_f);
             orders.push(OrderSubmission {
                 expires_at: expires_at,
                 market_id: market_id.clone(),
@@ -259,12 +295,12 @@ fn get_batch(
     
     if submit_asks {
         let side = Side::Sell;
-        let offset = f64::max(0.0 as f64,ask_offset * d.price_factor) as u64;
-
+        //let offset = f64::max(0.0 as f64,ask_offset * d.price_factor) as u64;
+        let offset = (ask_offset * d.price_factor) as i64;
         for i in 0..=num_levels-1 {
-            let price = best_ask.clone() + offset + i * step;
+            let price = (mid_price + offset + ((i * step) as i64)).max(vega_best_bid + 1);
             let price_f = price.to_f64().unwrap() / d.price_factor;
-            info!("order: sell {}@{}", size, price_f);
+            info!("mid: {}, order: sell {}@{}", (mid_price.clone().to_f64().unwrap() / d.price_factor), size, price_f);
             orders.push(OrderSubmission {
                 expires_at: expires_at,
                 market_id: market_id.clone(),
@@ -326,7 +362,6 @@ fn get_order_size_mm(
     let size = size * (1.0+buffer);
     return (size * d.position_factor) as i64;
 }
-
 
 
 // fn get_order_submission(
