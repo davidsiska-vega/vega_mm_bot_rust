@@ -199,6 +199,15 @@ impl VegaStore {
             len_before, 
             self.trades.len());
         self.trades.retain(|t| t.timestamp >= timestamp);
+
+        for t in self.trades.iter() 
+        {
+            info!("time: {}, size: {}, price: {}", 
+                convert_nanos_since_unix_epoch_datetime(t.timestamp as u64),
+                t.size,
+                t.price
+            );
+        }
     }
     
 

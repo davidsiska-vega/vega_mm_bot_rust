@@ -86,21 +86,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &*w1.public_key().clone(),
     );
 
-    // tokio::spawn(strategy2::start(
-    //     w1.clone(),
-    //     config.trade_size,
-    //     config.vega_market.clone(),
-    //     vstore.clone(),
-    //     rp.clone(),
-    //     config.volume_of_notional,
-    //     config.q_lower,
-    //     config.q_upper,
-    //     config.kappa,
-    //     config.lambd,
-    //     config.phi,
-    //     config.submission_rate,
-    // ));
-
     tokio::spawn(strategy2::start(
         w1.clone(),
         config.clone(),

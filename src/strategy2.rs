@@ -1,3 +1,4 @@
+use futures_util::lock::MutexGuard as FuturesUtilsMutexGuard;
 use log::info;
 use num_traits::ToPrimitive;
 use vega_protobufs::vega::events::v1::ExpiredOrders;
