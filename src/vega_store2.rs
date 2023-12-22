@@ -10,8 +10,6 @@ use tonic;
 use vega_protobufs::datanode::api::v2::GetLatestMarketDataRequest;
 use vega_protobufs::vega::MarketData;
 
-const TRADES_CACHE: usize = 10000;
-
 use vega_protobufs::{
     datanode::api::v2::{
         trading_data_service_client::TradingDataServiceClient, GetMarketRequest, ListAssetsRequest,
@@ -79,7 +77,7 @@ impl VegaStore {
         let positions: HashMap<String, Position> = HashMap::new();
 
         let mut previous_market_data: LruCache<i64, MarketData> =
-            LruCache::new(core::num::NonZeroUsize::new(1000).unwrap());
+            LruCache::new(core::num::NonZeroUsize::new(10000).unwrap());
 
         previous_market_data.put(market_data.timestamp, market_data.clone());
         return Ok(VegaStore {
@@ -128,56 +126,52 @@ impl VegaStore {
         for t in self.trades.iter_mut() {
             if t.timestamp == md.timestamp as u64 {
                 match md.best_offer_price.clone().to_string().parse::<f64>() {
-                    Ok(v) => {t.block_best_ask = v;}
-                    Err(e) => {continue;}
+                    Ok(v) => {
+                        t.block_best_ask = v;
+                    }
+                    Err(_) => {
+                        continue;
+                    }
                 }
 
                 match md.best_bid_price.clone().to_string().parse::<f64>() {
-                    Ok(v) => {t.block_best_bid = v;}
-                    Err(e) => {continue;}
-                }    
+                    Ok(v) => {
+                        t.block_best_bid = v;
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                }
             }
         }
     }
 
     pub fn save_trade(&mut self, trade: &Trade) {
-        if self.trades.len() > TRADES_CACHE {
-            self.trades.remove(0);
-        }
-
-        let (best_bid, best_ask) = match self.previous_market_data.get(&trade.timestamp) {
+        let (best_bid_f, best_ask_f) = match self.previous_market_data.get(&trade.timestamp) {
             Some(md) => (
-                Some(md.best_bid_price.clone()),
-                Some(md.best_offer_price.clone()),
+                md.best_bid_price.parse::<f64>().unwrap_or_default(),
+                md.best_offer_price.parse::<f64>().unwrap_or_default(),
             ),
-            None => (None, None),
+            None => (0.0, 0.0),
         };
 
-        let mut best_bid_f = 0.0;
-        match best_bid.clone().unwrap_or_default().parse::<f64>() {
-            Ok(v) => {best_bid_f = v;}
-            Err(e) => {return;}
-        }
+        let price_f = match trade.price.clone().to_string().parse::<f64>() {
+            Ok(v) => v,
+            Err(_) => {
+                error!("trade with no price: {:?}", trade);
+                return;
+            }
+        };
 
-        let mut best_ask_f = 0.0;
-        match best_ask.clone().unwrap_or_default().parse::<f64>() {
-            Ok(v) => {best_ask_f = v;}
-            Err(e) => {return;}
-        }
-
-        let mut price_f = 0.0;
-        match trade.price.clone().to_string().parse::<f64>() {
-            Ok(v) => {price_f = v;}
-            Err(e) => {return;}
-        }
-
-        info!("TRADE with time: {}, price: {}, size: {}, aggressor: {}, best_bid: {}, best_ask: {}", 
-                convert_nanos_since_unix_epoch_datetime(trade.timestamp as u64), 
-                price_f, 
-                trade.size, 
-                trade.aggressor,
-                best_bid_f, 
-                best_ask_f);
+        info!(
+            "TRADE with time: {}, price: {}, size: {}, aggressor: {}, best_bid: {}, best_ask: {}",
+            convert_nanos_since_unix_epoch_datetime(trade.timestamp as u64),
+            price_f,
+            trade.size,
+            trade.aggressor,
+            best_bid_f,
+            best_ask_f
+        );
 
         self.trades.push(TradeStat {
             timestamp: trade.timestamp as u64,
@@ -194,24 +188,23 @@ impl VegaStore {
 
     pub fn prune_trades_older_than(&mut self, timestamp: u64) {
         let len_before = self.trades.len();
-        info!("pruning trades older than {}; trades stored before pruning {}, after {}", 
-            convert_nanos_since_unix_epoch_datetime(timestamp as u64), 
-            len_before, 
-            self.trades.len());
+        info!(
+            "pruning trades older than {}; trades stored before pruning {}, after {}",
+            convert_nanos_since_unix_epoch_datetime(timestamp as u64),
+            len_before,
+            self.trades.len()
+        );
         self.trades.retain(|t| t.timestamp >= timestamp);
 
-        for t in self.trades.iter() 
-        {
-            info!("time: {}, size: {}, price: {}", 
+        for t in self.trades.iter() {
+            info!(
+                "time: {}, size: {}, price: {}",
                 convert_nanos_since_unix_epoch_datetime(t.timestamp as u64),
                 t.size,
                 t.price
             );
         }
     }
-    
-
-    
 }
 
 pub fn update_forever(
@@ -341,7 +334,6 @@ async fn update_trades_forever(
     }
 }
 
-
 pub fn convert_nanos_since_unix_epoch_datetime(t: u64) -> DateTime<Local> {
     // Convert nanoseconds to seconds and create a NaiveDateTime
     let seconds = t / 1_000_000_000;
@@ -354,10 +346,9 @@ pub fn convert_nanos_since_unix_epoch_datetime(t: u64) -> DateTime<Local> {
 
     // Convert UTC DateTime to DateTime in the local timezone
     let local_datetime: DateTime<Local> = utc_datetime.with_timezone(&Local);
-       
+
     return local_datetime;
 }
-
 
 #[derive(Debug)]
 pub enum Error {
