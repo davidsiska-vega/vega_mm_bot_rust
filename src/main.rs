@@ -35,13 +35,21 @@ struct Config {
     wallet_mnemonic_1: String,
     vega_market: String,
     binance_market: String,
-    trade_size: i64,
+    bond_amount: u64,
+    lp_fee_bid: f64,
+    create_liquidity_commitment: bool,
+    amend_liquidity_commitment: bool,
+    cancel_liquidity_commitment: bool,
     volume_of_notional: u64,
+    levels: u64,
+    step: f64,
+    price_range_factor: f64,
     q_lower: i64,
     q_upper: i64,
     kappa: f64,
     lambd: f64,
     phi: f64,
+    use_mid: bool,
     submission_rate: u64,
     dryrun: bool,
 }
@@ -63,6 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     info!("loaded wallet 1 with address {}", w1.public_key());
+    
+
 
     let rp = Arc::new(Mutex::new(binance_ws::RefPrice::new()));
 

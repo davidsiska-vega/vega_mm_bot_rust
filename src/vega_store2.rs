@@ -238,7 +238,7 @@ async fn update_market_data_forever(
     market: String,
 ) {
     // use vega_protobufs::datanode::api::v2::observe_markets_data_response=
-    info!("starting market_data stream for party: {}...", &*market);
+    info!("starting market_data stream for market: {}...", &*market);
     let mut stream = match clt
         .observe_markets_data(ObserveMarketsDataRequest {
             market_ids: vec![market],

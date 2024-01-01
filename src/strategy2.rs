@@ -2,6 +2,7 @@ use futures_util::lock::MutexGuard as FuturesUtilsMutexGuard;
 use log::info;
 use num_traits::ToPrimitive;
 use vega_protobufs::vega::events::v1::ExpiredOrders;
+use core::num;
 use std::time::{SystemTime, UNIX_EPOCH};
 use num_bigint::BigUint;
 use num_traits::cast::FromPrimitive;
@@ -13,13 +14,20 @@ use tokio::time;
 use vega_crypto::Transact;
 use vega_protobufs::vega::{
     commands::v1::{
-        input_data::Command, BatchMarketInstructions, OrderCancellation, OrderSubmission,
+        input_data::Command, 
+        BatchMarketInstructions, 
+        OrderCancellation, 
+        OrderSubmission,
+        LiquidityProvisionSubmission,
+        LiquidityProvisionAmendment,
+        LiquidityProvisionCancellation,
     },
     instrument::Product,
     order::{TimeInForce, Type},
-    Market, Side,
+    Market, Side
 };
 use vega_protobufs::vega::{Asset, Position};
+use vega_protobufs::vega::MarketData;
 
 use crate::{binance_ws::RefPrice, vega_store2::VegaStore};
 use crate::{Config, vega_store2};
@@ -40,21 +48,71 @@ pub async fn start(
         config.submission_rate
     );
 
+    let mkt = store.lock().unwrap().get_market();
+    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    let d = Decimals::new(&mkt, &asset);
+
     if !config.dryrun {
-        info!("closing all positions");
+        info!("closing all orders");
         match w1
             .send(Command::BatchMarketInstructions(get_close_batch(
                 config.vega_market.clone(),
             )))
             .await
         {
-            Ok(o) => info!("w1 close batch result: {:?}", o),
-            Err(e) => info!("w1 close batch transaction error: {:?}", e),
+            Ok(o) => info!("cancel orders batch result: {:?}", o),
+            Err(e) => info!("cancel orders transaction error: {:?}", e),
         };
+
+        if config.cancel_liquidity_commitment {
+            match w1
+                .send(Command::LiquidityProvisionCancellation(get_liquidity_cancellation_transaction(
+                    config.vega_market.clone(),
+                )))
+                .await
+            {
+                Ok(o) => info!("cancel liquidity result: {:?}", o),
+                Err(e) => info!("cancel liquidity  error: {:?}", e),
+            };
+        }
+
+        if config.create_liquidity_commitment{
+            match w1
+                .send(Command::LiquidityProvisionSubmission(get_liquidity_submission_transaction(
+                    config.vega_market.clone(),
+                    config.bond_amount as f64,
+                    config.lp_fee_bid,
+                    "basic_mm_bot".to_string(),
+                    &d,
+                )))
+                .await
+            {
+                Ok(o) => info!("submit new liquidity result: {:?}", o),
+                Err(e) => info!("submit new liquidity  error: {:?}", e),
+            };
+        }
+
+        if config.amend_liquidity_commitment {
+            match w1
+                .send(Command::LiquidityProvisionAmendment(get_liquidity_amendment_transaction(
+                    config.vega_market.clone(),
+                    config.bond_amount as f64,
+                    config.lp_fee_bid,
+                    "basic_mm_bot".to_string(),
+                    &d,
+                )))
+                .await
+            {
+                Ok(o) => info!("submit new liquidity result: {:?}", o),
+                Err(e) => info!("submit new liquidity  error: {:?}", e),
+            };
+        }
     }
     else {
-        info!("drurun mode, at this stage would submit a close transaction"); 
+        info!("drurun mode, at this stage would submit a close orders transaction and update / cancel liquidity"); 
     }
+
+
 
     let mut interval = time::interval(Duration::from_secs(config.submission_rate));
     loop {
@@ -138,15 +196,14 @@ async fn run_strategy(
     }
     info!(
         "reference prices to use: bid: {}, ask: {}", used_bid, used_ask);
+    
 
-
-    let w1_position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
+    let position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
         Some(p) => p.open_volume,
         None => 0,
     }; 
 
-
-    info!("Position size: {}", w1_position_size);
+    info!("Position size: {}", position_size);
 
     let mut lambd = c.lambd;
     let mut kappa = c.kappa;
@@ -162,8 +219,6 @@ async fn run_strategy(
 
         // Get the duration in nanoseconds
         let current_t = duration_since_epoch.as_nanos() as u64;
-        
-        
 
         let estimation_interval = Duration::from_secs(30*60).as_nanos() as u64;
 
@@ -175,47 +230,52 @@ async fn run_strategy(
         info!("Lambda estimate: {}, Kappa estimate: {}", lambd, kappa);
     }
 
-    let (buy_deltas, sell_deltas) = opt_offsets::calculate_offsets(c.q_lower, c.q_upper, kappa, lambd, c.phi);
+    let (buy_deltas, sell_deltas) = opt_offsets::calculate_offsets(c.q_lower, c.q_upper, kappa, lambd, c.phi, d.position_factor);
     let (ask_offset, submit_asks, bid_offset, submit_bids) =
-            opt_offsets::offsets_from_position(buy_deltas, sell_deltas, c.q_lower, c.q_upper, w1_position_size);
+            opt_offsets::offsets_from_position(buy_deltas, sell_deltas, c.q_lower, c.q_upper, position_size);
+
+
+    let vega_best_bid = vega_best_bid as f64 / d.price_factor;
+    let vega_best_ask = vega_best_ask as f64 / d.price_factor;
+    let used_bid = used_bid as f64 / d.price_factor;
+    let used_ask = used_ask as f64 / d.price_factor;
+    let used_mid_price = ((used_ask + used_bid)/2.0) as f64;
+    let worst_bid_offset = (used_mid_price as f64) * (c.price_range_factor - 0.005); // we remove 0.5 % from what's allowed to be more safely inside
+    let worst_ask_offset = (used_mid_price as f64) * (c.price_range_factor - 0.005);        
 
     if submit_asks {
-        info!("Submitting sells: {}, at offset: {}", submit_asks, ask_offset);
+        info!("Submitting sells: {}, at offset: {} in % at offset: {}%", submit_asks, ask_offset, 100.0*ask_offset/used_mid_price);
     }
+    else {
+        info!("Submitting worst sells at offset: {}, i.e. price level: {}", worst_ask_offset, used_mid_price as f64 + worst_ask_offset);
+    }
+
     if submit_bids {
-        info!("Submitting buys: {} at offset: {}", submit_bids, bid_offset);
+        info!("Submitting buys: {} at offset: {} in % at offset: {}%", submit_bids, bid_offset, 100.0*bid_offset/used_mid_price);
+    }
+    else {
+        info!("Submitting worst buys at offset: {}, i.e. price level: {}", worst_bid_offset, used_mid_price as f64 - worst_bid_offset);
     }
     
-    let num_levels = 3;
-    let order_size = get_order_size_mm(
-                            &d, 
-                            w1_position_size, 
-                            c.volume_of_notional, 
-                            num_levels, 
-                            (used_bid as f64 + used_ask as f64)/2.0/d.price_factor
-                        );
-
-    info!("Orders size: {}", order_size);
-    if order_size == 0 || order_size > 10 {
-        info!("order size is: {} not between 1 and 10" , order_size);
-        return;
-    }
-
     let batch_w1 = Command::BatchMarketInstructions(
         get_batch(
             c.vega_market.clone(),
-            ((used_ask + used_bid)/2) as i64,
-            used_bid as i64,
-            vega_best_bid as i64,
+            used_mid_price,
+            used_bid,
+            vega_best_bid,
             bid_offset,
             submit_bids,
-            used_ask as i64,
-            vega_best_ask as i64,
+            worst_bid_offset,
+            used_ask,
+            vega_best_ask,
             ask_offset,
             submit_asks,
-            order_size,
-            num_levels,
+            worst_ask_offset,
+            c.levels,
+            c.step,
+            c.volume_of_notional,
             &d,
+            c.use_mid,
         )
     );
     if !c.dryrun {
@@ -232,24 +292,25 @@ async fn run_strategy(
 
 fn get_batch(
     market_id: String,
-    mid_price: i64,
-    best_bid: i64,
-    vega_best_bid: i64, 
+    mid_price: f64,
+    best_bid: f64,
+    vega_best_bid: f64, 
     bid_offset: f64,
     submit_bids: bool,
-    best_ask: i64,
-    vega_best_ask: i64,
+    worst_bid_offset: f64,
+    best_ask: f64,
+    vega_best_ask: f64,
     ask_offset: f64,
     submit_asks: bool,
-    mut size: i64,
+    worst_ask_offset: f64,
     num_levels: u64,
+    step: f64,
+    volume_of_notional: u64,
     d: &Decimals,
+    use_mid: bool,
 ) -> BatchMarketInstructions {
     
-    if size <= 0 {
-        panic!("Size must be positive.");
-    }
-
+    
     let (tif, typ) = (TimeInForce::Gtt, Type::Limit);
     
     // Get the current time
@@ -263,26 +324,36 @@ fn get_batch(
 
     // Get the duration in nanoseconds
     let expires_at = duration_since_epoch_plus_extra.as_nanos() as i64;
-    
-    let step = 1;
 
     let mut orders: Vec<OrderSubmission> = vec![];
     
     // lets setup the buy side orders
+    let side = Side::Buy;
+    let mut ref_price = best_bid;
+    if use_mid {
+        ref_price = mid_price;
+    }
     if submit_bids {
-        let side = Side::Buy;
-        //let offset = f64::max(0.0 as f64,bid_offset * d.price_factor) as u64;
-        let offset = (bid_offset * d.price_factor) as i64;
+        let offset = bid_offset;
         for i in 0..=num_levels-1 {
-            let price = (mid_price - offset - ((i * step) as i64)).min(vega_best_ask - 1);
-            let price_f = price.to_f64().unwrap() / d.price_factor;
-            info!("mid: {}, order: buy {}@{}", (mid_price.clone().to_f64().unwrap() / d.price_factor), size, price_f);
+            let price = (ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
+            let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
+            let size = (size_f * d.position_factor).ceil() as u64;
+            let price_sub = (price * d.price_factor) as i64;
+
+            info!("ref: {}, order: buy {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (ref_price.clone().to_f64().unwrap()), 
+                        size_f, 
+                        price, 
+                        size, 
+                        price_sub);
+
             orders.push(OrderSubmission {
                 expires_at: expires_at,
                 market_id: market_id.clone(),
                 pegged_order: None,
-                price: price.to_string(),
-                size: size as u64,
+                price: price_sub.to_string(),
+                size: size,
                 reference: "".to_string(),
                 side: side.into(),
                 time_in_force: tif.into(),
@@ -292,21 +363,60 @@ fn get_batch(
                 iceberg_opts: None,
             });
         }
+    }
+    else {
+        let offset = worst_bid_offset;
+        let price = (ref_price - offset).min(vega_best_ask - 1.0/d.price_factor);
+        let price_sub = (price * d.price_factor) as i64;
+        let size_f = get_order_size_mm(volume_of_notional, 1, price);
+        let size = (size_f * d.position_factor).ceil() as u64;
+        info!("ref: {}, order: buy {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (ref_price.clone().to_f64().unwrap()), 
+                        size_f, 
+                        price, 
+                        size, 
+                        price_sub);
+
+        orders.push(OrderSubmission {
+            expires_at: expires_at,
+            market_id: market_id.clone(),
+            pegged_order: None,
+            price: price_sub.to_string(),
+            size: size,
+            reference: "".to_string(),
+            side: side.into(),
+            time_in_force: tif.into(),
+            r#type: typ.into(),
+            reduce_only: false,
+            post_only: true,
+            iceberg_opts: None,
+        });
     }
     
+    let side = Side::Sell;
+    ref_price = best_ask;
+    if use_mid {
+        ref_price = mid_price;
+    }
     if submit_asks {
-        let side = Side::Sell;
-        //let offset = f64::max(0.0 as f64,ask_offset * d.price_factor) as u64;
-        let offset = (ask_offset * d.price_factor) as i64;
+        let offset = ask_offset;
         for i in 0..=num_levels-1 {
-            let price = (mid_price + offset + ((i * step) as i64)).max(vega_best_bid + 1);
-            let price_f = price.to_f64().unwrap() / d.price_factor;
-            info!("mid: {}, order: sell {}@{}", (mid_price.clone().to_f64().unwrap() / d.price_factor), size, price_f);
+            let price = (ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
+            let price_sub = (price * d.price_factor) as i64;
+            let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
+            let size = (size_f * d.position_factor).ceil() as u64;
+            info!("ref: {}, order: sell {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (ref_price.clone().to_f64().unwrap()), 
+                        size_f, 
+                        price, 
+                        size, 
+                        price_sub);
+
             orders.push(OrderSubmission {
                 expires_at: expires_at,
                 market_id: market_id.clone(),
                 pegged_order: None,
-                price: price.to_string(),
+                price: price_sub.to_string(),
                 size: size as u64,
                 reference: "".to_string(),
                 side: side.into(),
@@ -318,6 +428,37 @@ fn get_batch(
             });
         }
     }
+    else {
+        let offset = worst_ask_offset;
+        let price = (ref_price + offset).max(vega_best_bid + 1.0);
+        let price_sub = (price * d.price_factor) as i64;
+        let size_f = get_order_size_mm(volume_of_notional, 1, price);
+        let size = (size_f * d.position_factor).ceil() as u64;
+        info!("mid: {}, order: sell {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (ref_price.clone().to_f64().unwrap()), 
+                        size_f, 
+                        price, 
+                        size, 
+                        price_sub);
+
+        orders.push(OrderSubmission {
+            expires_at: expires_at,
+            market_id: market_id.clone(),
+            pegged_order: None,
+            price: price_sub.to_string(),
+            size: size,
+            reference: "".to_string(),
+            side: side.into(),
+            time_in_force: tif.into(),
+            r#type: typ.into(),
+            reduce_only: false,
+            post_only: true,
+            iceberg_opts: None,
+        });
+    }
+
+
+
     return BatchMarketInstructions {
         cancellations: vec![OrderCancellation {
             order_id: "".to_string(),
@@ -343,13 +484,44 @@ fn get_close_batch(market_id: String) -> BatchMarketInstructions {
     };
 }
 
-fn get_order_size_mm(
+fn get_liquidity_submission_transaction(market_id: String, 
+    commitment_amt: f64, 
+    fee: f64, 
+    reference: String,
     d: &Decimals,
-    position_size: i64, 
+) -> LiquidityProvisionSubmission {
+    let commitment_amt_s = ((commitment_amt * d.asset_factor).floor() as i64).to_string();
+    return LiquidityProvisionSubmission { market_id: market_id, 
+        commitment_amount: commitment_amt_s,
+        fee: fee.to_string(),
+        reference: reference,
+    };
+}
+
+fn get_liquidity_amendment_transaction(market_id: String, 
+    commitment_amt: f64, 
+    fee: f64, 
+    reference: String,
+    d: &Decimals,
+) -> LiquidityProvisionAmendment {
+    let commitment_amt_s = ((commitment_amt * d.asset_factor).floor() as i64).to_string();
+    return LiquidityProvisionAmendment { market_id: market_id, 
+        commitment_amount: commitment_amt_s,
+        fee: fee.to_string(),
+        reference: reference,
+    };
+}
+
+
+fn get_liquidity_cancellation_transaction(market_id: String) -> LiquidityProvisionCancellation {
+    return LiquidityProvisionCancellation { market_id: market_id };
+}
+
+fn get_order_size_mm(
     volume_of_notional: u64,
     num_levels: u64,
     mid_price: f64,
-) -> i64 {
+) -> f64 {
     // volume_of_notional = price x size x num_levels
     // so size = volume_of_notional / price / num_levels 
     
@@ -361,87 +533,24 @@ fn get_order_size_mm(
     // we include a buffer to be sure we're meeting
     let buffer = 0.1;
     let size = size * (1.0+buffer);
-    return (size * d.position_factor) as i64;
+    return size;
 }
 
+// the point is to return the correct size of each i so that with the given
+// num_levels, price and step_size we hit the volume of notional. 
+fn get_order_size_mm_linear(
+    i: u64,
+    volume_of_notional: u64,
+    num_levels: u64,
+    price: f64,
+) -> f64 {
+    let buffer = 0.1;
+    // times two because the triangle needs 2x height to match size of rectangle
+    let height = (1.0+buffer) * (volume_of_notional as f64) / price / (num_levels as f64) * 2.0; 
+    let frac = (i+1) as f64 / num_levels as f64; 
+    return frac * height;
+}
 
-// fn get_order_submission(
-//     d: &Decimals,
-//     ref_price: f64,
-//     side: vega_wallet_client::commands::Side,
-//     market_id: String,
-//     target_volume: f64,
-// ) -> Vec<vega_wallet_client::commands::OrderSubmission> {
-//     use vega_wallet_client::commands::{OrderSubmission, OrderType, Side, TimeInForce};
-
-//     let size = target_volume / 5. * ref_price;
-
-//     fn price_buy(ref_price: f64, f: f64) -> f64 {
-//         ref_price * (1f64 - (f * 0.002))
-//     }
-
-//     fn price_sell(ref_price: f64, f: f64) -> f64 {
-//         ref_price * (1f64 + (f * 0.002))
-//     }
-
-//     let price_f: fn(f64, f64) -> f64 = match side {
-//         Side::Buy => price_buy,
-//         Side::Sell => price_sell,
-//         _ => panic!("should never happen"),
-//     };
-
-//     let mut orders: Vec<OrderSubmission> = vec![];
-//     for i in vec![1, 2, 3, 4, 5].into_iter() {
-//         let p =
-//             BigUint::from_f64(d.to_market_price_precision(price_f(ref_price, i as f64))).unwrap();
-
-//         orders.push(OrderSubmission {
-//             market_id: market_id.clone(),
-//             price: p.to_string(),
-//             size: d.to_market_position_precision(size) as u64,
-//             side,
-//             time_in_force: TimeInForce::Gtc,
-//             expires_at: 0,
-//             r#type: OrderType::Limit,
-//             reference: "VEGA_RUST_MM_SIMPLE".to_string(),
-//             pegged_order: None,
-//         });
-//     }
-
-//     return orders;
-// }
-
-// fn get_pubkey_balance(
-//     store: Arc<Mutex<VegaStore>>,
-//     pubkey: String,
-//     asset_id: String,
-//     d: &Decimals,
-// ) -> f64 {
-//     d.from_asset_precision(store.lock().unwrap().get_accounts().iter().fold(
-//         0f64,
-//         |balance, acc| {
-//             if acc.asset != asset_id || acc.owner != pubkey {
-//                 balance
-//             } else {
-//                 balance + acc.balance.parse::<f64>().unwrap()
-//             }
-//         },
-//     ))
-// }
-
-// // return vol, aep
-// fn volume_and_average_entry_price(d: &Decimals, pos: &Option<Position>) -> (f64, f64) {
-//     if let Some(p) = pos {
-//         let vol = p.open_volume as f64;
-//         let aep = p.average_entry_price.parse::<f64>().unwrap();
-//         return (
-//             d.from_market_position_precision(vol),
-//             d.from_market_price_precision(aep),
-//         );
-//     }
-
-//     return (0., 0.);
-// }
 
 fn get_asset(mkt: &Market) -> String {
     match mkt
@@ -460,6 +569,9 @@ fn get_asset(mkt: &Market) -> String {
 }
 
 struct Decimals {
+    position_decimal_places: i64,
+    price_decimal_places: u64,
+    asset_decimal_places: u64,
     position_factor: f64,
     price_factor: f64,
     asset_factor: f64,
@@ -468,6 +580,9 @@ struct Decimals {
 impl Decimals {
     fn new(mkt: &Market, asset: &Asset) -> Decimals {
         return Decimals {
+            position_decimal_places: mkt.position_decimal_places,
+            price_decimal_places: mkt.decimal_places,
+            asset_decimal_places: asset.details.as_ref().unwrap().decimals,
             position_factor: (10_f64).powf(mkt.position_decimal_places as f64),
             price_factor: (10_f64).powf(mkt.decimal_places as f64),
             asset_factor: (10_f64).powf(asset.details.as_ref().unwrap().decimals as f64),
@@ -495,70 +610,3 @@ impl Decimals {
     }
 }
 
-// async fn run_strategy(
-//     clt: &WalletClient,
-//     pubkey: String,
-//     market: String,
-//     store: Arc<Mutex<VegaStore>>,
-//     rp: Arc<Mutex<RefPrice>>,
-// ) {
-//     info!("executing trading strategy...");
-//     let mkt = store.lock().unwrap().get_market();
-//     let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
-
-//     info!(
-//         "updating quotes for {}",
-//         mkt.tradable_instrument
-//             .as_ref()
-//             .unwrap()
-//             .instrument
-//             .as_ref()
-//             .unwrap()
-//             .name
-//     );
-
-//     let d = Decimals::new(&mkt, &asset);
-
-//     let (best_bid, best_ask) = rp.lock().unwrap().get();
-//     info!(
-//         "new reference prices: bestBid({}), bestAsk({})",
-//         best_bid, best_ask
-//     );
-
-//     let (open_volume, aep) =
-//         volume_and_average_entry_price(&d, &store.lock().unwrap().get_position());
-
-//     let balance = get_pubkey_balance(store.clone(), pubkey.clone(), asset.id.clone(), &d);
-//     info!("pubkey balance: {}", balance);
-
-//     let bid_volume = balance * 0.5 - open_volume * aep;
-//     let offer_volume = balance * 0.5 + open_volume * aep;
-//     let notional_exposure = (open_volume * aep).abs();
-//     info!(
-//         "openvolume({}), entryPrice({}), notionalExposure({})",
-//         open_volume, aep, notional_exposure,
-//     );
-//     info!("bidVolume({}), offerVolume({})", bid_volume, offer_volume);
-
-//     use vega_wallet_client::commands::{BatchMarketInstructions, OrderCancellation, Side};
-
-//     let mut submissions = get_order_submission(&d, best_bid, Side::Buy, market.clone(), bid_volume);
-//     submissions.append(&mut get_order_submission(
-//         &d,
-//         best_ask,
-//         Side::Sell,
-//         market.clone(),
-//         offer_volume,
-//     ));
-//     let batch = BatchMarketInstructions {
-//         cancellations: vec![OrderCancellation {
-//             market_id: market.clone(),
-//             order_id: "".to_string(),
-//         }],
-//         amendments: vec![],
-//         submissions,
-//     };
-
-//     info!("batch submission: {:?}", batch);
-//     clt.send(batch).await.unwrap();
-// }

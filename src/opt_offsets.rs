@@ -18,6 +18,7 @@ pub fn calculate_offsets(
     kappa: f64,
     lambd: f64,
     phi: f64,
+    position_factor: f64,
 ) -> (Vec<f64>, Vec<f64>) {
     if q_lower >= q_upper {
         panic!("we need q_lower < q_upper");
@@ -25,7 +26,6 @@ pub fn calculate_offsets(
 
     let mut buy_deltas: Vec<f64> = vec![];
     for i in q_lower..=q_upper-1 {
-        //info!("i: {}",i);
         const ONE: f64 = 1.0;
         let buy_delta = 1.0/kappa + (2.0 * (i as f64) + 1.0) * (phi * ONE.exp() / lambd / kappa).sqrt() / 2.0;
         buy_deltas.push(buy_delta);
@@ -33,7 +33,6 @@ pub fn calculate_offsets(
 
     let mut sell_deltas: Vec<f64> = vec![];
     for i in q_lower+1..=q_upper {
-        //info!("i: {}",i);
         const ONE: f64 = 1.0;
         let sell_delta = 1.0/kappa - (2.0 * (i as f64) - 1.0) * (phi * ONE.exp() / lambd / kappa).sqrt() / 2.0;
         sell_deltas.push(sell_delta);
@@ -62,7 +61,6 @@ pub fn offsets_from_position(
 
     let mut bid_offset = std::f64::MAX;
     let mut ask_offset = std::f64::MAX;
-    //let (buy_deltas, sell_deltas) = opt_offsets::calculate_offsets(q_upper, q_lower, 1.0, 1.0, 1.0);
 
     let deltas_asks_idx = pos - q_lower;
     let mut submit_asks = true; // say position is -3, q_lower is -3 we get deltas_vec_idx = -3 + 3 = 0
@@ -96,7 +94,7 @@ mod tests {
         let lambd = 0.2;
         let phi = 0.1;
 
-        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, kappa, lambd, phi);
+        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, kappa, lambd, phi, 1.0);
 
         // Check we can run and get the right lengths
         assert_eq!(buy_deltas.len(), (q_upper - q_lower) as usize);
@@ -112,7 +110,7 @@ mod tests {
         
         // first test 0 position 
         let pos = 0;
-        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1);
+        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1, 1.0);
         let (ask_offset, submit_asks, bid_offset, submit_bids) =
             offsets_from_position(buy_deltas, sell_deltas, q_lower, q_upper, pos);
 
@@ -123,7 +121,7 @@ mod tests {
         
         // test position at lower boundary 
         let pos: i64 = -3;
-        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1);
+        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1 , 1.0);
         let (ask_offset, submit_asks, bid_offset, submit_bids) =
             offsets_from_position(buy_deltas, sell_deltas, q_lower, q_upper, pos);
 
@@ -134,7 +132,7 @@ mod tests {
         
         // test position below lower boundary 
         let pos: i64 = -4;
-        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1);
+        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1, 1.0);
         let (ask_offset, submit_asks, bid_offset, submit_bids) =
             offsets_from_position(buy_deltas, sell_deltas, q_lower, q_upper, pos);
 
@@ -145,7 +143,7 @@ mod tests {
 
         // test position at upper boundary 
         let pos: i64 = 3;
-        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1);
+        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1, 1.0);
         let (ask_offset, submit_asks, bid_offset, submit_bids) =
             offsets_from_position(buy_deltas, sell_deltas, q_lower, q_upper, pos);
 
@@ -156,7 +154,7 @@ mod tests {
 
         // test position above upper boundary 
         let pos: i64 = 4;
-        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1);
+        let (buy_deltas, sell_deltas) = calculate_offsets(q_lower, q_upper, 0.5, 0.2, 0.1, 1.0);
         let (ask_offset, submit_asks, bid_offset, submit_bids) =
             offsets_from_position(buy_deltas, sell_deltas, q_lower, q_upper, pos);
 
