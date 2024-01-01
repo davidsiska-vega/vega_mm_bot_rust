@@ -58,6 +58,7 @@ struct Config {
     lambd: f64,
     phi: f64,
     use_mid: bool,
+    gtt_length: u64,
     submission_rate: u64,
     dryrun: bool,
 }
