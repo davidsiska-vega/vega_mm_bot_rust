@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Arg, Parser};
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -15,6 +15,7 @@ use vega_store2::update_forever;
 mod binance_ws;
 //mod strategy;
 mod strategy2;
+mod liquidity_vega;
 mod vega_store2;
 mod opt_offsets;
 mod estimate_params;
@@ -25,7 +26,17 @@ struct Cli {
     /// Path to the configuration
     #[arg(long, default_value_t = String::from("config.json"))]
     config: String,
+    
+    #[arg(long, default_value_t = false)]
+    submit_liquidity: bool,
+    
+    #[arg(long, default_value_t = false)]
+    cancel_liquidity: bool,
+    
+    #[arg(long, default_value_t = false)]
+    amend_liquidity: bool,
 }
+
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -37,9 +48,6 @@ struct Config {
     binance_market: String,
     bond_amount: u64,
     lp_fee_bid: f64,
-    create_liquidity_commitment: bool,
-    amend_liquidity_commitment: bool,
-    cancel_liquidity_commitment: bool,
     volume_of_notional: u64,
     levels: u64,
     step: f64,
@@ -72,23 +80,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     info!("loaded wallet 1 with address {}", w1.public_key());
     
-
-
-    let rp = Arc::new(Mutex::new(binance_ws::RefPrice::new()));
-
-    tokio::spawn(binance_ws::start(
-        config.binance_ws_url.clone(),
-        config.binance_market.clone(),
-        rp.clone(),
-    ));
-
     let addr = config.vega_grpc_url.clone();
     let mut tdclt = TradingDataServiceClient::connect(addr).await?;
-
     let vstore = Arc::new(Mutex::new(
         vega_store2::VegaStore::new(&mut tdclt, &*config.vega_market).await?,
     ));
-
     update_forever(
         vstore.clone(),
         tdclt,
@@ -96,23 +92,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &*w1.public_key().clone(),
     );
 
-    tokio::spawn(strategy2::start(
-        w1.clone(),
-        config.clone(),
-        vstore.clone(),
-        rp.clone(),
-    ));
+
+    if cli.amend_liquidity {
+        if cli.cancel_liquidity || cli.submit_liquidity {
+            info!("can't do more than one of: amend, submit, cancel liquidity");
+            exit(1);    
+        }
+        liquidity_vega::update_liquidity_commitment(
+            w1.clone(),
+            config.clone(),
+            vstore.clone(),
+        ).await;
+        exit(0);
+    } 
+    else if cli.cancel_liquidity {
+        if cli.amend_liquidity || cli.submit_liquidity {
+            info!("can't do more than one of: amend, submit, cancel liquidity");
+            exit(1);    
+        }
+        liquidity_vega::cancel_liquidity_commitment(
+            w1.clone(),
+            config.clone(),
+            vstore.clone(),
+        ).await;
+        exit(0);
+    }
+    else if cli.submit_liquidity { 
+        if cli.cancel_liquidity || cli.amend_liquidity {
+            info!("can't do more than one of: amend, submit, cancel liquidity");
+            exit(1);    
+        }
+        liquidity_vega::create_liquidity_commitment(
+            w1.clone(),
+            config.clone(),
+            vstore.clone(),
+        ).await;
+        exit(0);
+    }
+    else {
+        let rp = Arc::new(Mutex::new(binance_ws::RefPrice::new()));
+
+        tokio::spawn(binance_ws::start(
+            config.binance_ws_url.clone(),
+            config.binance_market.clone(),
+            rp.clone(),
+        ));
+
+        
+        
+        
+        tokio::spawn(strategy2::start(
+            w1.clone(),
+            config.clone(),
+            vstore.clone(),
+            rp.clone(),
+        ));
 
 
-    // just loop forever, waiting for user interupt
-    let mut interval = time::interval(Duration::from_secs(1));
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                interval.reset();
+        // just loop forever, waiting for user interupt
+        let mut interval = time::interval(Duration::from_secs(1));
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    interval.reset();
+                }
             }
         }
     }
 
-    // tokio::spawn(api::start(cli.port, vstore.clone(), rp.clone()));
 }

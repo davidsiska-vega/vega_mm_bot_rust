@@ -63,53 +63,9 @@ pub async fn start(
             Ok(o) => info!("cancel orders batch result: {:?}", o),
             Err(e) => info!("cancel orders transaction error: {:?}", e),
         };
-
-        if config.cancel_liquidity_commitment {
-            match w1
-                .send(Command::LiquidityProvisionCancellation(get_liquidity_cancellation_transaction(
-                    config.vega_market.clone(),
-                )))
-                .await
-            {
-                Ok(o) => info!("cancel liquidity result: {:?}", o),
-                Err(e) => info!("cancel liquidity  error: {:?}", e),
-            };
-        }
-
-        if config.create_liquidity_commitment{
-            match w1
-                .send(Command::LiquidityProvisionSubmission(get_liquidity_submission_transaction(
-                    config.vega_market.clone(),
-                    config.bond_amount as f64,
-                    config.lp_fee_bid,
-                    "basic_mm_bot".to_string(),
-                    &d,
-                )))
-                .await
-            {
-                Ok(o) => info!("submit new liquidity result: {:?}", o),
-                Err(e) => info!("submit new liquidity  error: {:?}", e),
-            };
-        }
-
-        if config.amend_liquidity_commitment {
-            match w1
-                .send(Command::LiquidityProvisionAmendment(get_liquidity_amendment_transaction(
-                    config.vega_market.clone(),
-                    config.bond_amount as f64,
-                    config.lp_fee_bid,
-                    "basic_mm_bot".to_string(),
-                    &d,
-                )))
-                .await
-            {
-                Ok(o) => info!("submit new liquidity result: {:?}", o),
-                Err(e) => info!("submit new liquidity  error: {:?}", e),
-            };
-        }
     }
     else {
-        info!("drurun mode, at this stage would submit a close orders transaction and update / cancel liquidity"); 
+        info!("drurun mode, at this stage would submit a close orders transaction"); 
     }
 
 
@@ -484,39 +440,6 @@ fn get_close_batch(market_id: String) -> BatchMarketInstructions {
     };
 }
 
-fn get_liquidity_submission_transaction(market_id: String, 
-    commitment_amt: f64, 
-    fee: f64, 
-    reference: String,
-    d: &Decimals,
-) -> LiquidityProvisionSubmission {
-    let commitment_amt_s = ((commitment_amt * d.asset_factor).floor() as i64).to_string();
-    return LiquidityProvisionSubmission { market_id: market_id, 
-        commitment_amount: commitment_amt_s,
-        fee: fee.to_string(),
-        reference: reference,
-    };
-}
-
-fn get_liquidity_amendment_transaction(market_id: String, 
-    commitment_amt: f64, 
-    fee: f64, 
-    reference: String,
-    d: &Decimals,
-) -> LiquidityProvisionAmendment {
-    let commitment_amt_s = ((commitment_amt * d.asset_factor).floor() as i64).to_string();
-    return LiquidityProvisionAmendment { market_id: market_id, 
-        commitment_amount: commitment_amt_s,
-        fee: fee.to_string(),
-        reference: reference,
-    };
-}
-
-
-fn get_liquidity_cancellation_transaction(market_id: String) -> LiquidityProvisionCancellation {
-    return LiquidityProvisionCancellation { market_id: market_id };
-}
-
 fn get_order_size_mm(
     volume_of_notional: u64,
     num_levels: u64,
@@ -552,7 +475,7 @@ fn get_order_size_mm_linear(
 }
 
 
-fn get_asset(mkt: &Market) -> String {
+pub fn get_asset(mkt: &Market) -> String {
     match mkt
         .clone()
         .tradable_instrument
@@ -568,17 +491,17 @@ fn get_asset(mkt: &Market) -> String {
     }
 }
 
-struct Decimals {
+pub struct Decimals {
     position_decimal_places: i64,
     price_decimal_places: u64,
     asset_decimal_places: u64,
-    position_factor: f64,
-    price_factor: f64,
-    asset_factor: f64,
+    pub position_factor: f64,
+    pub price_factor: f64,
+    pub asset_factor: f64,
 }
 
 impl Decimals {
-    fn new(mkt: &Market, asset: &Asset) -> Decimals {
+    pub fn new(mkt: &Market, asset: &Asset) -> Decimals {
         return Decimals {
             position_decimal_places: mkt.position_decimal_places,
             price_decimal_places: mkt.decimal_places,
