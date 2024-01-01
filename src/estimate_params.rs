@@ -75,6 +75,7 @@ pub fn estimate_lambda2(initial_lambd: f64,
 
 // Biased but maximum likelyhood estimator of kappa
 pub fn estimate_kappa(initial_kappa: f64, 
+    kappa_weight: f64,
     current_t: u64, // current time 
     estimation_interval: u64, // period over which to consider trades
     trades: &Vec<TradeStat>,
@@ -103,7 +104,7 @@ pub fn estimate_kappa(initial_kappa: f64,
         return initial_kappa;
     }
     let kappa_mle = (trade_count as f64) / sum_mid_price_diffs;
-    return kappa_mle;
+    return kappa_weight * initial_kappa + (1.0-kappa_weight) * kappa_mle;
 
 }
 

@@ -182,7 +182,7 @@ async fn run_strategy(
 
         let trades = store.lock().unwrap().get_trades().clone();
         lambd = estimate_lambda2(lambd, current_t, estimation_interval, &trades);
-        kappa = estimate_kappa(kappa, current_t, estimation_interval, &trades, d.price_factor);
+        kappa = estimate_kappa(kappa, c.kappa_weight, current_t, estimation_interval, &trades, d.price_factor);
         info!("Lambda estimate: {}, Kappa estimate: {}", lambd, kappa);
     }
 
@@ -475,6 +475,23 @@ fn get_order_size_mm_linear(
     let frac = (i+1) as f64 / num_levels as f64; 
     return frac * height;
 }
+
+
+// the point is to return the correct size of each i so that with the given
+// num_levels, price and step_size we hit the volume of notional. 
+fn get_order_size_mm_quadratic(
+    i: u64,
+    volume_of_notional: u64,
+    num_levels: u64,
+    price: f64,
+) -> f64 {
+    let buffer = 0.1;
+    // times two because the triangle needs 2x height to match size of rectangle
+    let height = (1.0+buffer) * (volume_of_notional as f64) / price / (num_levels as f64) * 2.0; 
+    let frac = (i+1) as f64 / num_levels as f64; 
+    return frac * height;
+}
+
 
 
 pub fn get_asset(mkt: &Market) -> String {
