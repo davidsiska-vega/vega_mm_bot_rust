@@ -232,6 +232,7 @@ async fn run_strategy(
             c.volume_of_notional,
             &d,
             c.use_mid,
+            c.gtt_length,
         )
     );
     if !c.dryrun {
@@ -264,6 +265,7 @@ fn get_batch(
     volume_of_notional: u64,
     d: &Decimals,
     use_mid: bool,
+    gtt_length: u64,
 ) -> BatchMarketInstructions {
     
     
@@ -276,7 +278,7 @@ fn get_batch(
     let duration_since_epoch = current_time.duration_since(UNIX_EPOCH).expect("Time went backwards");
 
     // Add some time to current time
-    let duration_since_epoch_plus_extra = duration_since_epoch + Duration::from_secs(20);
+    let duration_since_epoch_plus_extra = duration_since_epoch + Duration::from_secs(gtt_length);
 
     // Get the duration in nanoseconds
     let expires_at = duration_since_epoch_plus_extra.as_nanos() as i64;
