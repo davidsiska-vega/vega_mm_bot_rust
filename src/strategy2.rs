@@ -182,7 +182,7 @@ async fn run_strategy(
 
         let trades = store.lock().unwrap().get_trades().clone();
         lambd = estimate_lambda2(lambd, current_t, estimation_interval, &trades);
-        kappa = estimate_kappa(kappa, current_t, estimation_interval, &trades, d.price_factor);
+        kappa = estimate_kappa(kappa, c.kappa_weight, current_t, estimation_interval, &trades, d.price_factor);
         info!("Lambda estimate: {}, Kappa estimate: {}", lambd, kappa);
     }
 
@@ -295,7 +295,8 @@ fn get_batch(
         let offset = bid_offset;
         for i in 0..=num_levels-1 {
             let price = (ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
-            let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
+            //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
+            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
             let price_sub = (price * d.price_factor) as i64;
 
@@ -361,7 +362,8 @@ fn get_batch(
         for i in 0..=num_levels-1 {
             let price = (ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
             let price_sub = (price * d.price_factor) as i64;
-            let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
+            //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
+            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
             info!("ref: {}, order: sell {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
                         (ref_price.clone().to_f64().unwrap()), 
@@ -475,6 +477,27 @@ fn get_order_size_mm_linear(
     let frac = (i+1) as f64 / num_levels as f64; 
     return frac * height;
 }
+
+
+// the point is to return the correct size of each i so that with the given
+// num_levels, price and step_size we hit the volume of notional. 
+fn get_order_size_mm_quadratic(
+    i: u64,
+    volume_of_notional: u64,
+    num_levels: u64,
+    step: f64,
+    offset: f64,
+    ref_price: f64,
+) -> f64 {
+    let buffer = 0.05;
+    // times two because the triangle needs 2x height to match size of rectangle
+    let delta = step * (num_levels as f64);
+    let delta_cubed = delta * delta * delta; 
+    let slope = step * 3.0 * (volume_of_notional as f64) / ref_price / delta_cubed;
+    
+    return (1.0+buffer) * slope * offset * offset;
+}
+
 
 
 pub fn get_asset(mkt: &Market) -> String {

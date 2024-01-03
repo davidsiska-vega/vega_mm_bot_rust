@@ -55,6 +55,7 @@ struct Config {
     q_lower: i64,
     q_upper: i64,
     kappa: f64,
+    kappa_weight: f64,
     lambd: f64,
     phi: f64,
     use_mid: bool,
