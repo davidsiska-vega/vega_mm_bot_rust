@@ -77,7 +77,8 @@ pub async fn start(
 
 
 
-    let mut interval = time::interval(Duration::from_secs(config.submission_rate));
+    //let mut interval = time::interval(Duration::from_secs(config.submission_rate));
+    let mut interval = time::interval(Duration::from_secs_f64(config.submission_rate));
     loop {
         tokio::select! {
             _ = interval.tick() => {
