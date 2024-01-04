@@ -34,6 +34,13 @@ use crate::{Config, vega_store2};
 use crate::opt_offsets;
 use crate::estimate_params::{self, estimate_lambda2, estimate_kappa};
 
+#[derive(Debug, PartialEq)]
+pub enum PositionSituation {
+    Normal, 
+    OnTheEdge,
+    HardStop,
+}
+
 
 
 pub async fn start(
@@ -199,15 +206,34 @@ async fn run_strategy(
     let worst_bid_offset = (used_mid_price as f64) * (c.price_range_factor - 0.005); // we remove 0.5 % from what's allowed to be more safely inside
     let worst_ask_offset = (used_mid_price as f64) * (c.price_range_factor - 0.005);        
 
+    let mut ask_side_situation: PositionSituation = PositionSituation::Normal; 
     if submit_asks {
         info!("Submitting sells: {}, at offset: {} in % at offset: {}%", submit_asks, ask_offset, 100.0*ask_offset/used_mid_price);
     }
     else {
-        info!("Submitting worst sells at offset: {}, i.e. price level: {}", worst_ask_offset, used_mid_price as f64 + worst_ask_offset);
+        // if the position is too negative we don't want to sell any more, so hard stop on ask side
+        if (position_size as f64) < (c.q_lower as f64) * c.pos_lim_scaling {
+            ask_side_situation = PositionSituation::HardStop;
+            info!("Position: {} too negaitve, not submitting anything on ask side", position_size);
+        }
+        else {
+            ask_side_situation = PositionSituation::OnTheEdge;
+            info!("Submitting SLA range worst sells at offset: {}, i.e. price level: {}", worst_ask_offset, used_mid_price as f64 + worst_ask_offset);
+        }
     }
 
+    let mut bid_side_situation = PositionSituation::Normal;
     if submit_bids {
-        info!("Submitting buys: {} at offset: {} in % at offset: {}%", submit_bids, bid_offset, 100.0*bid_offset/used_mid_price);
+        // if the position is too positive we don't want to buy anyone, so hard stop on bid side
+        if (position_size as f64) > (c.q_upper as f64) * c.pos_lim_scaling {
+            bid_side_situation = PositionSituation::HardStop;
+            info!("Position: {} too positive, not submitting anything on bid side", position_size);
+        }
+        else {
+            bid_side_situation = PositionSituation::Normal;
+            info!("Submitting buys: {} at offset: {} in % at offset: {}%", submit_bids, bid_offset, 100.0*bid_offset/used_mid_price);
+        }
+        
     }
     else {
         info!("Submitting worst buys at offset: {}, i.e. price level: {}", worst_bid_offset, used_mid_price as f64 - worst_bid_offset);
@@ -220,12 +246,12 @@ async fn run_strategy(
             used_bid,
             vega_best_bid,
             bid_offset,
-            submit_bids,
+            bid_side_situation,
             worst_bid_offset,
             used_ask,
             vega_best_ask,
             ask_offset,
-            submit_asks,
+            ask_side_situation,
             worst_ask_offset,
             c.levels,
             c.step,
@@ -253,12 +279,12 @@ fn get_batch(
     best_bid: f64,
     vega_best_bid: f64, 
     bid_offset: f64,
-    submit_bids: bool,
+    bid_side_situation: PositionSituation,
     worst_bid_offset: f64,
     best_ask: f64,
     vega_best_ask: f64,
     ask_offset: f64,
-    submit_asks: bool,
+    ask_side_situation: PositionSituation,
     worst_ask_offset: f64,
     num_levels: u64,
     step: f64,
@@ -291,7 +317,7 @@ fn get_batch(
     if use_mid {
         ref_price = mid_price;
     }
-    if submit_bids {
+    if bid_side_situation == PositionSituation::Normal {
         let offset = bid_offset;
         for i in 0..=num_levels-1 {
             let price = (ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
@@ -323,7 +349,7 @@ fn get_batch(
             });
         }
     }
-    else {
+    else if bid_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_bid_offset;
         let price = (ref_price - offset).min(vega_best_ask - 1.0/d.price_factor);
         let price_sub = (price * d.price_factor) as i64;
@@ -357,7 +383,7 @@ fn get_batch(
     if use_mid {
         ref_price = mid_price;
     }
-    if submit_asks {
+    if ask_side_situation == PositionSituation::Normal {
         let offset = ask_offset;
         for i in 0..=num_levels-1 {
             let price = (ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
@@ -388,7 +414,7 @@ fn get_batch(
             });
         }
     }
-    else {
+    else if ask_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_ask_offset;
         let price = (ref_price + offset).max(vega_best_bid + 1.0);
         let price_sub = (price * d.price_factor) as i64;

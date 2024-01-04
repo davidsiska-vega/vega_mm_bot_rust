@@ -54,6 +54,7 @@ struct Config {
     price_range_factor: f64,
     q_lower: i64,
     q_upper: i64,
+    pos_lim_scaling: f64,
     kappa: f64,
     kappa_weight: f64,
     lambd: f64,
@@ -62,6 +63,46 @@ struct Config {
     gtt_length: u64,
     submission_rate: u64,
     dryrun: bool,
+}
+
+fn config_validation(c: Config) {
+    if c.lp_fee_bid < 0.0 {
+        panic!("config file lp_fee_bid must be >= 0.0");
+    }
+
+    if c.step <= 0.0 {
+        panic!("config file step must be > 0.0");
+    }
+
+    if c.price_range_factor <= 0.0 {
+        panic!("config file price_range_factor must be > 0.0");
+    }
+
+    if c.q_lower >= c.q_upper {
+        panic!("we need q_lower < q_upper");
+    }
+
+    if c.pos_lim_scaling < 1.0 {
+        panic!("config file pos_lim_scaling must be >= 1.0");
+    }
+
+    if c.kappa <= 0.0 {
+        panic!("config file kappa must be > 0.0");
+    }
+
+    if c.kappa_weight < 0.0 || c.kappa_weight > 1.0 {
+        panic!("config file kappa_weight must be >= 0.0 and <= 1.0");
+    }
+
+    if c.lambd < 0.0 {
+        panic!("config file lambd must be > 0.0");
+    }
+
+    if c.phi < 0.0 {
+        panic!("config file phi must be > 0.0");
+    }
+
+
 }
 
 #[tokio::main]
@@ -74,6 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let data = fs::read_to_string(&*cli.config).expect("unable to read configuration file");
     let config: Config = serde_json::from_str(&data).expect("unable to parse configuration file");
+
+    config_validation(config.clone());
 
     let w1 = Transact::new(
         Credentials::Mnemonic(&config.wallet_mnemonic_1, 1),
