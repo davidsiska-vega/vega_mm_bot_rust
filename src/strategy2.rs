@@ -75,9 +75,6 @@ pub async fn start(
         info!("drurun mode, at this stage would submit a close orders transaction"); 
     }
 
-
-
-    //let mut interval = time::interval(Duration::from_secs(config.submission_rate));
     let mut interval = time::interval(Duration::from_secs_f64(config.submission_rate));
     loop {
         tokio::select! {
@@ -167,7 +164,7 @@ async fn run_strategy(
         None => 0,
     }; 
 
-    info!("Position size: {}", position_size);
+    
 
     let mut lambd = c.lambd;
     let mut kappa = c.kappa;
@@ -206,12 +203,10 @@ async fn run_strategy(
     let used_mid_price = ((used_ask + used_bid)/2.0) as f64;
     let worst_bid_offset = (used_mid_price as f64) * (c.price_range_factor - 0.005); // we remove 0.5 % from what's allowed to be more safely inside
     let worst_ask_offset = (used_mid_price as f64) * (c.price_range_factor - 0.005);        
-
     let mut ask_side_situation: PositionSituation = PositionSituation::Normal; 
-    if submit_asks {
-        info!("Submitting sells: {}, at offset: {} in % at offset: {}%", submit_asks, ask_offset, 100.0*ask_offset/used_mid_price);
-    }
-    else {
+    
+    info!("Position size: {}", position_size);
+    if !submit_asks {
         // if the position is too negative we don't want to sell any more, so hard stop on ask side
         if (position_size as f64) < (c.q_lower as f64) * c.pos_lim_scaling {
             ask_side_situation = PositionSituation::HardStop;
@@ -224,20 +219,16 @@ async fn run_strategy(
     }
 
     let mut bid_side_situation = PositionSituation::Normal;
-    if submit_bids {
+    if !submit_bids {
         // if the position is too positive we don't want to buy anyone, so hard stop on bid side
         if (position_size as f64) > (c.q_upper as f64) * c.pos_lim_scaling {
             bid_side_situation = PositionSituation::HardStop;
             info!("Position: {} too positive, not submitting anything on bid side", position_size);
         }
         else {
-            bid_side_situation = PositionSituation::Normal;
-            info!("Submitting buys: {} at offset: {} in % at offset: {}%", submit_bids, bid_offset, 100.0*bid_offset/used_mid_price);
-        }
-        
-    }
-    else {
-        info!("Submitting worst buys at offset: {}, i.e. price level: {}", worst_bid_offset, used_mid_price as f64 - worst_bid_offset);
+            bid_side_situation = PositionSituation::OnTheEdge;
+            info!("Submitting worst buys at offset: {}, i.e. price level: {}", worst_bid_offset, used_mid_price as f64 - worst_bid_offset);
+        }    
     }
     
     let batch_w1 = Command::BatchMarketInstructions(
@@ -259,6 +250,7 @@ async fn run_strategy(
             c.volume_of_notional,
             &d,
             c.use_mid,
+            c.allow_negative_offset,
             c.gtt_length,
         )
     );
@@ -292,6 +284,7 @@ fn get_batch(
     volume_of_notional: u64,
     d: &Decimals,
     use_mid: bool,
+    allow_negative_offset: bool,
     gtt_length: u64,
 ) -> BatchMarketInstructions {
     
@@ -319,7 +312,11 @@ fn get_batch(
         ref_price = mid_price;
     }
     if bid_side_situation == PositionSituation::Normal {
-        let offset = bid_offset;
+        let mut offset = bid_offset;
+        if !allow_negative_offset && offset < 0.0 {
+            offset = 0.0;
+        }
+        info!("Submitting sells at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
             let price = (ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
@@ -385,7 +382,11 @@ fn get_batch(
         ref_price = mid_price;
     }
     if ask_side_situation == PositionSituation::Normal {
-        let offset = ask_offset;
+        let mut offset = ask_offset;
+        if !allow_negative_offset && offset < 0.0 {
+            offset = 0.0;
+        }
+        info!("Submitting buys at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
             let price = (ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
             let price_sub = (price * d.price_factor) as i64;
