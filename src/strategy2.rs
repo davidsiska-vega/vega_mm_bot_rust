@@ -316,7 +316,7 @@ fn get_batch(
         if !allow_negative_offset && offset < 0.0 {
             offset = 0.0;
         }
-        info!("Submitting sells at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
+        info!("Submitting buys at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
             let price = (ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
@@ -386,7 +386,7 @@ fn get_batch(
         if !allow_negative_offset && offset < 0.0 {
             offset = 0.0;
         }
-        info!("Submitting buys at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
+        info!("Submitting sells at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
             let price = (ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
             let price_sub = (price * d.price_factor) as i64;
