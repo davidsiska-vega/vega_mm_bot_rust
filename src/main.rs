@@ -60,6 +60,7 @@ struct Config {
     lambd: f64,
     phi: f64,
     use_mid: bool,
+    use_vega_bidask: bool,
     allow_negative_offset: bool,
     gtt_length: u64,
     submission_rate: f64,
