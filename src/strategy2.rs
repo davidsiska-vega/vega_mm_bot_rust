@@ -124,16 +124,21 @@ async fn run_strategy(
 
     let d = Decimals::new(&mkt, &asset);
 
-    let (binance_best_bid_f, binance_best_ask_f) = rp.lock().unwrap().get();
-    if binance_best_ask_f <= 0.0 || binance_best_ask_f <= 0.0 {
-        info!("At least one Binance price is NOT +ve! Either error or prices not updated yet.");
-        return;
-    }
-    let binance_best_bid = (binance_best_bid_f * d.price_factor) as u64;
-    let binance_best_ask = (binance_best_ask_f * d.price_factor) as u64;
-    info!(
-        "new Binance reference prices: bestBid({}), bestAsk({}))", binance_best_bid, binance_best_ask);
+    let mut binance_best_bid = 0 as u64;
+    let mut binance_best_ask = 0 as u64; 
 
+    if c.use_binance_bidask {
+        let (binance_best_bid_f, binance_best_ask_f) = rp.lock().unwrap().get();
+        if binance_best_ask_f <= 0.0 || binance_best_ask_f <= 0.0 {
+            info!("At least one Binance price is NOT +ve! Either error or prices not updated yet.");
+            return;
+        }
+        binance_best_bid = (binance_best_bid_f * d.price_factor) as u64;
+        binance_best_ask = (binance_best_ask_f * d.price_factor) as u64;
+        info!(
+            "new Binance reference prices: bestBid({}), bestAsk({}))", binance_best_bid, binance_best_ask);
+    }
+    
     let md = store.lock().unwrap().get_market_data();
     
     let vega_best_bid = BigUint::parse_bytes(md.best_bid_price.as_bytes(), 10).unwrap().to_u64().unwrap_or(0);
@@ -145,15 +150,26 @@ async fn run_strategy(
     info!(
         "new Vega reference prices: bestBid({}), bestAsk({})", vega_best_bid, vega_best_ask);
 
-    let mut used_ask = binance_best_ask; // = std::cmp::max(binance_best_ask, vega_best_ask);
-    let mut used_bid = binance_best_bid; // std::cmp::min(binance_best_bid, vega_best_bid);
-    if c.use_vega_bidask {
+    let used_ask: u64;
+    let used_bid: u64;
+    if c.use_vega_bidask && c.use_binance_bidask {
         // best ask we take the bigger one
         used_ask = std::cmp::max(binance_best_ask, vega_best_ask);
         // best bid we take the smaller one
         used_bid = std::cmp::min(binance_best_bid, vega_best_bid);    
     }
-    
+    else if c.use_vega_bidask && !c.use_binance_bidask {
+        used_ask = vega_best_ask;
+        used_bid = vega_best_bid;
+    }
+    else if !c.use_vega_bidask && c.use_binance_bidask {
+        used_ask = binance_best_ask; 
+        used_bid = binance_best_bid; 
+    }
+    else {
+        info!("We must use one of Binance OR Vega OR max on ask side, min on bid side.");
+        return;
+    }
 
     if used_ask <= 0 || used_bid <= 0 {
         info!("reference price are not up to date yet");
