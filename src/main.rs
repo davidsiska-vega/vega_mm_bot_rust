@@ -61,6 +61,7 @@ struct Config {
     phi: f64,
     use_mid: bool,
     use_vega_bidask: bool,
+    use_binance_bidask: bool,
     allow_negative_offset: bool,
     gtt_length: u64,
     submission_rate: f64,
@@ -106,6 +107,10 @@ fn config_validation(c: Config) {
 
     if c.submission_rate < 1.0 {
         panic!("config file submission_rate must be >= 1.0, otherwise you risk getting spam-banned as we don't increase PoW difficulty properly.");
+    }
+
+    if !c.use_binance_bidask && !c.use_vega_bidask {
+        panic!("at the moment we need to use at least one of binance or vega bid/asks to set prices");
     }
 
 }
@@ -182,14 +187,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     else {
         let rp = Arc::new(Mutex::new(binance_ws::RefPrice::new()));
 
-        tokio::spawn(binance_ws::start(
-            config.binance_ws_url.clone(),
-            config.binance_market.clone(),
-            rp.clone(),
-        ));
-
-        
-        
+        if config.use_binance_bidask {
+            tokio::spawn(binance_ws::start(
+                config.binance_ws_url.clone(),
+                config.binance_market.clone(),
+                rp.clone(),
+            ));    
+        }
         
         tokio::spawn(strategy2::start(
             w1.clone(),
