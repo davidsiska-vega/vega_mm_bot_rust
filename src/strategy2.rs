@@ -138,18 +138,22 @@ async fn run_strategy(
     
     let vega_best_bid = BigUint::parse_bytes(md.best_bid_price.as_bytes(), 10).unwrap().to_u64().unwrap_or(0);
     let vega_best_ask = BigUint::parse_bytes(md.best_offer_price.as_bytes(), 10).unwrap().to_u64().unwrap_or(0);
-    if vega_best_bid == 0 || vega_best_ask == 0 {
+    if c.use_vega_bidask && (vega_best_bid == 0 || vega_best_ask == 0) {
         info!("At least one vega price is NOT +ve! Either error or prices not updated yet.");
         return
     }
     info!(
         "new Vega reference prices: bestBid({}), bestAsk({})", vega_best_bid, vega_best_ask);
 
-    // we now conservatively process the reference prices: 
-    // best ask we take the bigger one
-    let used_ask = std::cmp::max(binance_best_ask, vega_best_ask);
-    // best bid we take the smaller one
-    let used_bid = std::cmp::min(binance_best_bid, vega_best_bid);
+    let mut used_ask = binance_best_ask; // = std::cmp::max(binance_best_ask, vega_best_ask);
+    let mut used_bid = binance_best_bid; // std::cmp::min(binance_best_bid, vega_best_bid);
+    if c.use_vega_bidask {
+        // best ask we take the bigger one
+        used_ask = std::cmp::max(binance_best_ask, vega_best_ask);
+        // best bid we take the smaller one
+        used_bid = std::cmp::min(binance_best_bid, vega_best_bid);    
+    }
+    
 
     if used_ask <= 0 || used_bid <= 0 {
         info!("reference price are not up to date yet");
