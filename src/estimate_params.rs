@@ -102,8 +102,14 @@ pub fn estimate_kappa(initial_kappa: f64,
     if trade_count == 0 {
         // we've not seen any trades that would qualify, we have no data
         return initial_kappa;
-    }
+    } 
+    
     let kappa_mle = (trade_count as f64) / sum_mid_price_diffs;
+    if kappa_mle.is_nan() || kappa_mle.is_infinite() {
+        info!("kappa mle estimate is NaN or Inf. ");
+        return initial_kappa;
+    }
+    
     return kappa_weight * initial_kappa + (1.0-kappa_weight) * kappa_mle;
 
 }
