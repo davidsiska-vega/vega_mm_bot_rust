@@ -105,8 +105,8 @@ fn config_validation(c: Config) {
         panic!("config file phi must be > 0.0");
     }
 
-    if c.submission_rate < 1.0 {
-        panic!("config file submission_rate must be >= 1.0, otherwise you risk getting spam-banned as we don't increase PoW difficulty properly.");
+    if c.submission_rate < 0.01 {
+        panic!("config file submission_rate must be >= 0.01, otherwise you risk getting spam-banned as we don't increase PoW difficulty properly.");
     }
 
     if !c.use_binance_bidask && !c.use_vega_bidask {
