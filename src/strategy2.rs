@@ -3,12 +3,14 @@ use log::info;
 use num_traits::ToPrimitive;
 use vega_protobufs::vega::events::v1::ExpiredOrders;
 use core::num;
+use std::thread::Thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use num_bigint::BigUint;
 use num_traits::cast::FromPrimitive;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time;
+use rand::prelude::*;
 
 
 use vega_crypto::Transact;
@@ -40,8 +42,6 @@ pub enum PositionSituation {
     OnTheEdge,
     HardStop,
 }
-
-
 
 pub async fn start(
     mut w1: Transact,
@@ -76,6 +76,7 @@ pub async fn start(
     }
 
     let mut interval = time::interval(Duration::from_secs_f64(config.submission_rate));
+
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -87,7 +88,7 @@ pub async fn start(
                 run_strategy(&mut w1, 
                     &config, 
                     store.clone(), 
-                    rp.clone(), 
+                    rp.clone(),
                 ).await;
             }
         }
@@ -103,7 +104,7 @@ async fn run_strategy(
     if c.q_lower >= c.q_upper {
         panic!("we need q_lower < q_upper");
     }
-    
+
     info!("executing trading strategy...");
     let mkt = store.lock().unwrap().get_market();
     let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
@@ -254,6 +255,24 @@ async fn run_strategy(
         }    
     }
     
+
+    
+    let mut dispose_of_short_pos = false;
+    if position_size <= c.dispose_q_lower {
+        let random_number: f64 = rand::random();
+        dispose_of_short_pos = random_number <= c.dispose_prob;
+        info!("position too short, will try to buy: {}", dispose_of_short_pos);
+    }
+    
+    let mut dispose_of_long_pos = false;
+    if position_size >= c.dispose_q_upper {
+        let random_number: f64 = rand::random();
+        dispose_of_long_pos = random_number <= c.dispose_prob;
+        info!("position too long, will try to sell: {}", dispose_of_long_pos);
+    }
+    
+
+
     let batch_w1 = Command::BatchMarketInstructions(
         get_batch(
             c.vega_market.clone(),
@@ -275,6 +294,8 @@ async fn run_strategy(
             c.use_mid,
             c.allow_negative_offset,
             c.gtt_length,
+            dispose_of_short_pos,
+            dispose_of_long_pos,
         )
     );
     if !c.dryrun {
@@ -309,6 +330,8 @@ fn get_batch(
     use_mid: bool,
     allow_negative_offset: bool,
     gtt_length: u64,
+    dispose_of_short_pos: bool,
+    dispose_of_long_pos: bool,
 ) -> BatchMarketInstructions {
     
     
@@ -328,12 +351,15 @@ fn get_batch(
 
     let mut orders: Vec<OrderSubmission> = vec![];
     
+    let mut buy_side_ref_price = best_bid;
+    let mut sell_side_ref_price = best_ask;
+    if use_mid {
+        buy_side_ref_price = mid_price;
+        sell_side_ref_price = mid_price;
+    }
+    
     // lets setup the buy side orders
     let side = Side::Buy;
-    let mut ref_price = best_bid;
-    if use_mid {
-        ref_price = mid_price;
-    }
     if bid_side_situation == PositionSituation::Normal {
         let mut offset = bid_offset;
         if !allow_negative_offset && offset < 0.0 {
@@ -341,14 +367,14 @@ fn get_batch(
         }
         info!("Submitting buys at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
-            let price = (ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
+            let price = (buy_side_ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
-            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), ref_price);
+            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), buy_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
             let price_sub = (price * d.price_factor) as i64;
 
-            info!("ref: {}, order: buy {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
-                        (ref_price.clone().to_f64().unwrap()), 
+            info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (buy_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
                         size, 
@@ -372,12 +398,12 @@ fn get_batch(
     }
     else if bid_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_bid_offset;
-        let price = (ref_price - offset).min(vega_best_ask - 1.0/d.price_factor);
+        let price = (buy_side_ref_price - offset).min(vega_best_ask - 1.0/d.price_factor);
         let price_sub = (price * d.price_factor) as i64;
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
-        info!("ref: {}, order: buy {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
-                        (ref_price.clone().to_f64().unwrap()), 
+        info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (buy_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
                         size, 
@@ -400,10 +426,6 @@ fn get_batch(
     }
     
     let side = Side::Sell;
-    ref_price = best_ask;
-    if use_mid {
-        ref_price = mid_price;
-    }
     if ask_side_situation == PositionSituation::Normal {
         let mut offset = ask_offset;
         if !allow_negative_offset && offset < 0.0 {
@@ -411,13 +433,13 @@ fn get_batch(
         }
         info!("Submitting sells at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
-            let price = (ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
+            let price = (sell_side_ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
             let price_sub = (price * d.price_factor) as i64;
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
-            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, ref_price);
+            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, sell_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
-            info!("ref: {}, order: sell {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
-                        (ref_price.clone().to_f64().unwrap()), 
+            info!("ref: {}, order: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (sell_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
                         size, 
@@ -441,12 +463,12 @@ fn get_batch(
     }
     else if ask_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_ask_offset;
-        let price = (ref_price + offset).max(vega_best_bid + 1.0);
+        let price = (sell_side_ref_price + offset).max(vega_best_bid + 1.0);
         let price_sub = (price * d.price_factor) as i64;
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
-        info!("mid: {}, order: sell {:.3} @ {:.3}, at position and price decimals: {} @ {}", 
-                        (ref_price.clone().to_f64().unwrap()), 
+        info!("mid: {}, order: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+                        (sell_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
                         size, 
@@ -464,6 +486,59 @@ fn get_batch(
             r#type: typ.into(),
             reduce_only: false,
             post_only: true,
+            iceberg_opts: None,
+        });
+    }
+    
+    if dispose_of_short_pos {
+        // we're setting up on order that will reduce our position (or so we hope)
+        let price = sell_side_ref_price + ask_offset - 1.0/d.price_factor;
+        let price_sub = (price * d.price_factor) as i64;
+        let size = 1 as u64;
+        let size_f = size as f64 / d.position_factor;
+        info!("To reduce short position: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
+                        size_f, 
+                        price, 
+                        size, 
+                        price_sub);
+        orders.push(OrderSubmission {
+            expires_at: expires_at,
+            market_id: market_id.clone(),
+            pegged_order: None,
+            price: price_sub.to_string(),
+            size: size as u64,
+            reference: "".to_string(),
+            side: Side::Buy.into(),
+            time_in_force: tif.into(),
+            r#type: typ.into(),
+            reduce_only: false,
+            post_only: false,
+            iceberg_opts: None,
+        });
+    }
+    else if dispose_of_long_pos {
+        // we're setting up on order that will reduce our position (or so we hope)
+        let price = buy_side_ref_price + bid_offset - 1.0/d.price_factor;
+        let price_sub = (price * d.price_factor) as i64;
+        let size = 1 as u64;
+        let size_f = size as f64 / d.position_factor;
+        info!("To reduce long position: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
+                        size_f, 
+                        price, 
+                        size, 
+                        price_sub);
+        orders.push(OrderSubmission {
+            expires_at: expires_at,
+            market_id: market_id.clone(),
+            pegged_order: None,
+            price: price_sub.to_string(),
+            size: size as u64,
+            reference: "".to_string(),
+            side: Side::Sell.into(),
+            time_in_force: tif.into(),
+            r#type: typ.into(),
+            reduce_only: false,
+            post_only: false,
             iceberg_opts: None,
         });
     }

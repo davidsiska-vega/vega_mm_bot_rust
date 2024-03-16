@@ -64,6 +64,9 @@ struct Config {
     use_binance_bidask: bool,
     allow_negative_offset: bool,
     gtt_length: u64,
+    dispose_prob: f64,
+    dispose_q_lower: i64,
+    dispose_q_upper: i64,
     submission_rate: f64,
     dryrun: bool,
 }
@@ -111,6 +114,14 @@ fn config_validation(c: Config) {
 
     if !c.use_binance_bidask && !c.use_vega_bidask {
         panic!("at the moment we need to use at least one of binance or vega bid/asks to set prices");
+    }
+
+    if c.dispose_prob < 0.0 || c.dispose_prob > 1.0 {
+        panic!("dispose_prob must be in [0,1]");
+    }
+
+    if c.dispose_q_lower >= c.dispose_q_upper {
+        panic!("we need dispose_q_lower < dispose_q_upper");
     }
 
 }
@@ -195,6 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ));    
         }
         
+        let mut rng = rand::thread_rng();
         tokio::spawn(strategy2::start(
             w1.clone(),
             config.clone(),
