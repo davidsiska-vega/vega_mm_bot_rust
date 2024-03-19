@@ -518,7 +518,7 @@ fn get_batch(
     }
     else if dispose_of_long_pos {
         // we're setting up on order that will reduce our position (or so we hope)
-        let price = buy_side_ref_price + bid_offset - 1.0/d.price_factor;
+        let price = buy_side_ref_price - bid_offset + 1.0/d.price_factor;
         let price_sub = (price * d.price_factor) as i64;
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
