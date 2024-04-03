@@ -222,9 +222,9 @@ async fn run_strategy(
     let used_bid = used_bid as f64 / d.price_factor;
     let used_ask = used_ask as f64 / d.price_factor;
     let used_mid_price = ((used_ask + used_bid)/2.0) as f64;
-    let worst_bid_offset = (used_mid_price as f64) * (c.price_range_factor - 0.01); // we remove 0.5 % from what's allowed to be more safely inside
+    let worst_bid_offset = (used_mid_price as f64) * (c.price_range_factor - 0.001); // we remove 0.5 % from what's allowed to be more safely inside
     bid_offset = bid_offset.min(worst_bid_offset);
-    let worst_ask_offset = (used_mid_price as f64) * (c.price_range_factor - 0.01);        
+    let worst_ask_offset = (used_mid_price as f64) * (c.price_range_factor - 0.001);        
     ask_offset = ask_offset.min(worst_ask_offset);
     
     let mut ask_side_situation: PositionSituation = PositionSituation::Normal; 
