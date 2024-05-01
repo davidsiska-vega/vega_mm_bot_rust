@@ -86,10 +86,10 @@ fn config_validation(c: Config) {
     }
 
     // We need step size to be a multiple of tick_size
-    let remainder_step_over_tick = c.step % c.tick_size;
-    if remainder_step_over_tick > 1e-12 {
-        panic!("config file step size must be an integer multiple of tick_size");
-    }
+    // let remainder_step_over_tick = c.step % c.tick_size;
+    // if remainder_step_over_tick > 1e-12 {
+    //     panic!("config file step size must be an integer multiple of tick_size");
+    // }
 
     if c.price_range_factor <= 0.0 {
         panic!("config file price_range_factor must be > 0.0");
