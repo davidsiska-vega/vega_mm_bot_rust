@@ -373,11 +373,12 @@ fn get_batch(
             if vega_best_ask > 0.0 {
                 price = price.min(vega_best_ask - 1.0/d.price_factor)
             }
-            price -= price % tick;
+            
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
             let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), buy_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
-            let price_sub = (price * d.price_factor) as i64;
+            let mut price_sub = (price * d.price_factor) as i64;
+            price_sub -= price_sub % ((tick * d.price_factor) as i64);
 
             info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
                         (buy_side_ref_price.clone().to_f64().unwrap()), 
@@ -408,8 +409,9 @@ fn get_batch(
         if vega_best_bid > 0.0 {
             price = price.min(vega_best_ask - 1.0/d.price_factor);
         }
-        price -= price % tick;
-        let price_sub = (price * d.price_factor) as i64;
+        
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
         info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
@@ -448,7 +450,6 @@ fn get_batch(
                 price = price.max(vega_best_bid + 1.0/d.price_factor);
             }
             
-            //price -= price % tick;
             let mut price_sub = (price * d.price_factor) as i64;
             price_sub -= price_sub % ((tick * d.price_factor) as i64);
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
@@ -483,8 +484,9 @@ fn get_batch(
         if vega_best_bid > 0.0 {
             price = price.max(vega_best_bid + 1.0)
         }
-        price -= price % tick;
-        let price_sub = (price * d.price_factor) as i64;
+        
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
         info!("mid: {}, order: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
@@ -512,9 +514,9 @@ fn get_batch(
     
     if dispose_of_short_pos {
         // we're setting up on order that will reduce our position (or so we hope)
-        let mut price = sell_side_ref_price + ask_offset - 1.0/d.price_factor;
-        price -= price % tick;
-        let price_sub = (price * d.price_factor) as i64;
+        let price = sell_side_ref_price + ask_offset - 1.0/d.price_factor;
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
         info!("To reduce short position: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
@@ -539,9 +541,9 @@ fn get_batch(
     }
     else if dispose_of_long_pos {
         // we're setting up on order that will reduce our position (or so we hope)
-        let mut price = buy_side_ref_price - bid_offset + 1.0/d.price_factor;
-        price -= price % tick;
-        let price_sub = (price * d.price_factor) as i64;
+        let price = buy_side_ref_price - bid_offset + 1.0/d.price_factor;
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
         info!("To reduce long position: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
