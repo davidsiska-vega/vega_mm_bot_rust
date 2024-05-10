@@ -289,6 +289,7 @@ async fn run_strategy(
             worst_ask_offset,
             c.levels,
             c.step,
+            c.tick_size,
             c.volume_of_notional,
             &d,
             c.use_mid,
@@ -325,6 +326,7 @@ fn get_batch(
     worst_ask_offset: f64,
     num_levels: u64,
     step: f64,
+    tick: f64,
     volume_of_notional: u64,
     d: &Decimals,
     use_mid: bool,
@@ -367,11 +369,16 @@ fn get_batch(
         }
         info!("Submitting buys at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
-            let price = (buy_side_ref_price - offset - (i as f64 * step)).min(vega_best_ask - 1.0/d.price_factor);
+            let mut price = buy_side_ref_price - offset - (i as f64 * step);
+            if vega_best_ask > 0.0 {
+                price = price.min(vega_best_ask - 1.0/d.price_factor)
+            }
+            
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
             let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), buy_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
-            let price_sub = (price * d.price_factor) as i64;
+            let mut price_sub = (price * d.price_factor) as i64;
+            price_sub -= price_sub % ((tick * d.price_factor) as i64);
 
             info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
                         (buy_side_ref_price.clone().to_f64().unwrap()), 
@@ -398,8 +405,13 @@ fn get_batch(
     }
     else if bid_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_bid_offset;
-        let price = (buy_side_ref_price - offset).min(vega_best_ask - 1.0/d.price_factor);
-        let price_sub = (price * d.price_factor) as i64;
+        let mut price = buy_side_ref_price - offset;
+        if vega_best_bid > 0.0 {
+            price = price.min(vega_best_ask - 1.0/d.price_factor);
+        }
+        
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
         info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
@@ -433,8 +445,13 @@ fn get_batch(
         }
         info!("Submitting sells at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
-            let price = (sell_side_ref_price + offset + (i as f64 * step)).max(vega_best_bid + 1.0/d.price_factor);
-            let price_sub = (price * d.price_factor) as i64;
+            let mut price = sell_side_ref_price + offset + (i as f64 * step);
+            if vega_best_ask > 0.0 {
+                price = price.max(vega_best_bid + 1.0/d.price_factor);
+            }
+            
+            let mut price_sub = (price * d.price_factor) as i64;
+            price_sub -= price_sub % ((tick * d.price_factor) as i64);
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
             let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, sell_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
@@ -463,8 +480,13 @@ fn get_batch(
     }
     else if ask_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_ask_offset;
-        let price = (sell_side_ref_price + offset).max(vega_best_bid + 1.0);
-        let price_sub = (price * d.price_factor) as i64;
+        let mut price = sell_side_ref_price + offset;
+        if vega_best_bid > 0.0 {
+            price = price.max(vega_best_bid + 1.0)
+        }
+        
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
         info!("mid: {}, order: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
@@ -493,7 +515,8 @@ fn get_batch(
     if dispose_of_short_pos {
         // we're setting up on order that will reduce our position (or so we hope)
         let price = sell_side_ref_price + ask_offset - 1.0/d.price_factor;
-        let price_sub = (price * d.price_factor) as i64;
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
         info!("To reduce short position: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
@@ -519,7 +542,8 @@ fn get_batch(
     else if dispose_of_long_pos {
         // we're setting up on order that will reduce our position (or so we hope)
         let price = buy_side_ref_price - bid_offset + 1.0/d.price_factor;
-        let price_sub = (price * d.price_factor) as i64;
+        let mut price_sub = (price * d.price_factor) as i64;
+        price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
         info!("To reduce long position: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}",  

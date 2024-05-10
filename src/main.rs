@@ -51,6 +51,7 @@ struct Config {
     volume_of_notional: u64,
     levels: u64,
     step: f64,
+    tick_size: f64,
     price_range_factor: f64,
     q_lower: i64,
     q_upper: i64,
@@ -79,6 +80,16 @@ fn config_validation(c: Config) {
     if c.step <= 0.0 {
         panic!("config file step must be > 0.0");
     }
+
+    if c.tick_size <= 0.0 {
+        panic!("config file tick_size must be > 0.0");
+    }
+
+    // We need step size to be a multiple of tick_size
+    // let remainder_step_over_tick = c.step % c.tick_size;
+    // if remainder_step_over_tick > 1e-12 {
+    //     panic!("config file step size must be an integer multiple of tick_size");
+    // }
 
     if c.price_range_factor <= 0.0 {
         panic!("config file price_range_factor must be > 0.0");
