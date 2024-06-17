@@ -134,8 +134,8 @@ async fn run_strategy(
             info!("At least one Binance price is NOT +ve! Either error or prices not updated yet.");
             return;
         }
-        binance_best_bid = (binance_best_bid_f * d.price_factor) as u64;
-        binance_best_ask = (binance_best_ask_f * d.price_factor) as u64;
+        binance_best_bid = (c.binance_price_scaling * binance_best_bid_f * d.price_factor) as u64;
+        binance_best_ask = (c.binance_price_scaling * binance_best_ask_f * d.price_factor) as u64;
         info!(
             "new Binance reference prices: bestBid({}), bestAsk({}))", binance_best_bid, binance_best_ask);
     }
