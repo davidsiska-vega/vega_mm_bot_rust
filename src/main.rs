@@ -46,6 +46,7 @@ struct Config {
     wallet_mnemonic_1: String,
     vega_market: String,
     binance_market: String,
+    binance_price_scaling: f64,
     bond_amount: u64,
     lp_fee_bid: f64,
     volume_of_notional: u64,
@@ -73,7 +74,11 @@ struct Config {
 }
 
 fn config_validation(c: Config) {
-    if c.lp_fee_bid < 0.0 {
+   if c.binance_price_scaling < 0.0 {
+        panic!("binance price scaling must be >= 0.0"); 
+   }
+   
+   if c.lp_fee_bid < 0.0 {
         panic!("config file lp_fee_bid must be >= 0.0");
     }
 
