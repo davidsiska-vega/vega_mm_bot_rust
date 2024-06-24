@@ -405,7 +405,7 @@ fn get_batch(
     }
     else if bid_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_bid_offset;
-        let mut price = buy_side_ref_price + offset;
+        let mut price = buy_side_ref_price - offset;
         if vega_best_bid > 0.0 {
             price = price.min(vega_best_ask - 1.0/d.price_factor);
         }
@@ -480,7 +480,7 @@ fn get_batch(
     }
     else if ask_side_situation == PositionSituation::OnTheEdge {
         let offset = worst_ask_offset;
-        let mut price = sell_side_ref_price - offset;
+        let mut price = sell_side_ref_price + offset;
         if vega_best_bid > 0.0 {
             price = price.max(vega_best_bid + 1.0)
         }
