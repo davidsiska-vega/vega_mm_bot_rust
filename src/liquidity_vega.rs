@@ -29,11 +29,11 @@ use vega_protobufs::vega::{
 use vega_protobufs::vega::{Asset, Position};
 use vega_protobufs::vega::MarketData;
 
-use crate::{binance_ws::RefPrice, vega_store2::VegaStore};
+use crate::{vega_store2::VegaStore};
 use crate::{Config, vega_store2};
 use crate::opt_offsets;
 use crate::estimate_params::{self, estimate_lambda2, estimate_kappa};
-use crate::strategy2::{Decimals, get_asset};
+use crate::strategy2::{Decimals, get_asset, MarketAsset};
 
 
 pub async fn create_liquidity_commitment(
@@ -43,7 +43,11 @@ pub async fn create_liquidity_commitment(
 ) {
     
     let mkt = store.lock().unwrap().get_market();
-    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    let asset = match get_asset(&mkt) {
+        MarketAsset::Future(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Perpetual(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Spot(base, _quote) => store.lock().unwrap().get_asset(base),
+    };
     let d = Decimals::new(&mkt, &asset);
 
     if !config.dryrun {
@@ -73,7 +77,11 @@ pub async fn cancel_liquidity_commitment(
 ) {
     
     let mkt = store.lock().unwrap().get_market();
-    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    let asset = match get_asset(&mkt) {
+        MarketAsset::Future(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Perpetual(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Spot(base, _quote) => store.lock().unwrap().get_asset(base),
+    };
     let d = Decimals::new(&mkt, &asset);
 
     if !config.dryrun {
@@ -99,7 +107,11 @@ pub async fn update_liquidity_commitment(
 ) {
     
     let mkt = store.lock().unwrap().get_market();
-    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    let asset = match get_asset(&mkt) {
+        MarketAsset::Future(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Perpetual(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Spot(base, _quote) => store.lock().unwrap().get_asset(base),
+    };
     let d = Decimals::new(&mkt, &asset);
 
     if !config.dryrun {

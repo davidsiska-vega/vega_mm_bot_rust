@@ -27,6 +27,7 @@ pub struct TradeStat {
     pub block_best_ask: f64,
 }
 
+
 pub struct VegaStore {
     market: Market,
     market_data: MarketData,
