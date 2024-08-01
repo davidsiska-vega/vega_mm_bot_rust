@@ -12,8 +12,9 @@ use vega_protobufs::datanode::api::v2::trading_data_service_client::TradingDataS
 use vega_store2::update_forever;
 
 // mod api;
+mod ref_price;
 mod binance_ws;
-//mod strategy;
+mod bybit_feed;
 mod strategy2;
 mod liquidity_vega;
 mod vega_store2;
@@ -43,6 +44,8 @@ struct Config {
     port: u16,
     vega_grpc_url: String,
     binance_ws_url: String,
+    bybit_url: String,
+    bybit_market: String,
     wallet_mnemonic_1: String,
     vega_market: String,
     binance_market: String,
@@ -64,6 +67,8 @@ struct Config {
     use_mid: bool,
     use_vega_bidask: bool,
     use_binance_bidask: bool,
+    use_bybit_bidask: bool,
+    use_vega_trades: bool,
     allow_negative_offset: bool,
     gtt_length: u64,
     dispose_prob: f64,
@@ -128,8 +133,8 @@ fn config_validation(c: Config) {
         panic!("config file submission_rate must be >= 0.01, otherwise you risk getting spam-banned as we don't increase PoW difficulty properly.");
     }
 
-    if !c.use_binance_bidask && !c.use_vega_bidask {
-        panic!("at the moment we need to use at least one of binance or vega bid/asks to set prices");
+    if !c.use_binance_bidask && !c.use_vega_bidask && ! c.use_bybit_bidask {
+        panic!("at the moment we need to use at least one of binance, bybit, vega bid/asks to set prices");
     }
 
     if c.dispose_prob < 0.0 || c.dispose_prob > 1.0 {
@@ -212,13 +217,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         exit(0);
     }
     else {
-        let rp = Arc::new(Mutex::new(binance_ws::RefPrice::new()));
-
+        let binance_rp = Arc::new(Mutex::new(ref_price::RefPrice::new()));
         if config.use_binance_bidask {
             tokio::spawn(binance_ws::start(
                 config.binance_ws_url.clone(),
                 config.binance_market.clone(),
-                rp.clone(),
+                binance_rp.clone(),
+            ));    
+        }
+
+        let bybit_rp = Arc::new(Mutex::new(ref_price::RefPrice::new()));
+        if config.use_bybit_bidask {
+            tokio::spawn(bybit_feed::start(
+                config.bybit_url.clone(),
+                config.bybit_market.clone(),
+                bybit_rp.clone(),
+                1000,
             ));    
         }
         
@@ -227,7 +241,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             w1.clone(),
             config.clone(),
             vstore.clone(),
-            rp.clone(),
+            binance_rp.clone(),
+            bybit_rp.clone(),
         ));
 
 

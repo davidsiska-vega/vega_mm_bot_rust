@@ -31,10 +31,11 @@ use vega_protobufs::vega::{
 use vega_protobufs::vega::{Asset, Position};
 use vega_protobufs::vega::MarketData;
 
-use crate::{binance_ws::RefPrice, vega_store2::VegaStore};
+use crate::{vega_store2::VegaStore};
 use crate::{Config, vega_store2};
 use crate::opt_offsets;
 use crate::estimate_params::{self, estimate_lambda2, estimate_kappa};
+use crate::ref_price::RefPrice;
 
 #[derive(Debug, PartialEq)]
 pub enum PositionSituation {
@@ -47,7 +48,8 @@ pub async fn start(
     mut w1: Transact,
     config: Config,
     store: Arc<Mutex<VegaStore>>,
-    rp: Arc<Mutex<RefPrice>>,
+    binance_rp: Arc<Mutex<RefPrice>>,
+    bybit_rp: Arc<Mutex<RefPrice>>,
 ) {
     // just loop forever, waiting for user interupt
     info!(
@@ -56,7 +58,11 @@ pub async fn start(
     );
 
     let mkt = store.lock().unwrap().get_market();
-    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    let asset = match get_asset(&mkt) {
+        MarketAsset::Future(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Perpetual(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Spot(base, _quote) => store.lock().unwrap().get_asset(base),
+    };
     let d = Decimals::new(&mkt, &asset);
 
     if !config.dryrun {
@@ -88,7 +94,8 @@ pub async fn start(
                 run_strategy(&mut w1, 
                     &config, 
                     store.clone(), 
-                    rp.clone(),
+                    binance_rp.clone(),
+                    bybit_rp.clone(),
                 ).await;
             }
         }
@@ -99,7 +106,8 @@ async fn run_strategy(
     w1: &mut Transact,
     c: &Config,
     store: Arc<Mutex<VegaStore>>,
-    rp: Arc<Mutex<RefPrice>>,
+    binance_rp: Arc<Mutex<RefPrice>>,
+    bybit_rp: Arc<Mutex<RefPrice>>,
 ) {
     if c.q_lower >= c.q_upper {
         panic!("we need q_lower < q_upper");
@@ -107,7 +115,11 @@ async fn run_strategy(
 
     info!("executing trading strategy...");
     let mkt = store.lock().unwrap().get_market();
-    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    let asset = match get_asset(&mkt) {
+        MarketAsset::Future(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Perpetual(a) => store.lock().unwrap().get_asset(a),
+        MarketAsset::Spot(base, _quote) => store.lock().unwrap().get_asset(_quote),
+    };
 
     info!(
         "updating quotes for {}",
@@ -129,7 +141,7 @@ async fn run_strategy(
     let mut binance_best_ask = 0 as u64; 
 
     if c.use_binance_bidask {
-        let (binance_best_bid_f, binance_best_ask_f) = rp.lock().unwrap().get();
+        let (binance_best_bid_f, binance_best_ask_f) = binance_rp.lock().unwrap().get();
         if binance_best_ask_f <= 0.0 || binance_best_ask_f <= 0.0 {
             info!("At least one Binance price is NOT +ve! Either error or prices not updated yet.");
             return;
@@ -140,6 +152,22 @@ async fn run_strategy(
             "new Binance reference prices: bestBid({}), bestAsk({}))", binance_best_bid, binance_best_ask);
     }
     
+    let mut bybit_best_bid = 0 as u64;
+    let mut bybit_best_ask = 0 as u64;
+    if c.use_bybit_bidask {
+        let (bybit_best_bid_f, bybit_best_ask_f) = bybit_rp.lock().unwrap().get();
+
+        if bybit_best_bid_f <= 0.0 || bybit_best_ask_f <= 0.0 {
+            info!("At least one Bybit price is NOT +ve! Either error or prices not updated yet.");
+            return;
+        }
+
+        bybit_best_bid = (bybit_best_bid_f * d.price_factor) as u64;
+        bybit_best_ask = (bybit_best_ask_f * d.price_factor) as u64;
+        info!(
+            "new Bybit reference prices: bestBid({}), bestAsk({}))", bybit_best_bid, bybit_best_ask);
+    }
+
     let md = store.lock().unwrap().get_market_data();
     
     let vega_best_bid = BigUint::parse_bytes(md.best_bid_price.as_bytes(), 10).unwrap().to_u64().unwrap_or(0);
@@ -153,19 +181,33 @@ async fn run_strategy(
 
     let used_ask: u64;
     let used_bid: u64;
-    if c.use_vega_bidask && c.use_binance_bidask {
+    
+    if c.use_vega_bidask && c.use_binance_bidask && c.use_bybit_bidask{
+        // best ask we take the bigger one
+        let used_ask_intermediate = std::cmp::max(binance_best_ask, vega_best_ask);
+        used_ask = std::cmp::max(used_ask_intermediate, bybit_best_ask);
+        
+        // best bid we take the smaller one
+        let used_bid_intermediate = std::cmp::min(binance_best_bid, vega_best_bid);    
+        used_bid = std::cmp::min(used_bid_intermediate, bybit_best_bid);    
+    }
+    else if c.use_vega_bidask && c.use_binance_bidask {
         // best ask we take the bigger one
         used_ask = std::cmp::max(binance_best_ask, vega_best_ask);
         // best bid we take the smaller one
         used_bid = std::cmp::min(binance_best_bid, vega_best_bid);    
     }
-    else if c.use_vega_bidask && !c.use_binance_bidask {
+    else if c.use_vega_bidask && !c.use_binance_bidask && !c.use_bybit_bidask {
         used_ask = vega_best_ask;
         used_bid = vega_best_bid;
     }
-    else if !c.use_vega_bidask && c.use_binance_bidask {
+    else if !c.use_vega_bidask && c.use_binance_bidask && !c.use_bybit_bidask {
         used_ask = binance_best_ask; 
         used_bid = binance_best_bid; 
+    }
+    else if !c.use_vega_bidask && !c.use_binance_bidask && c.use_bybit_bidask {
+        used_ask = bybit_best_ask; 
+        used_bid = bybit_best_bid; 
     }
     else {
         info!("We must use one of Binance OR Vega OR max on ask side, min on bid side.");
@@ -367,7 +409,7 @@ fn get_batch(
         if !allow_negative_offset && offset < 0.0 {
             offset = 0.0;
         }
-        info!("Submitting buys at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
+        info!("Submitting buys at offset: {:.5} in % at offset: {:.5}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
             let mut price = buy_side_ref_price - offset - (i as f64 * step);
             if vega_best_ask > 0.0 {
@@ -380,7 +422,7 @@ fn get_batch(
             let mut price_sub = (price * d.price_factor) as i64;
             price_sub -= price_sub % ((tick * d.price_factor) as i64);
 
-            info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+            info!("ref: {}, order: buy {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (buy_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
@@ -414,7 +456,7 @@ fn get_batch(
         price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
-        info!("ref: {}, order: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+        info!("ref: {}, order: buy {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (buy_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
@@ -443,7 +485,7 @@ fn get_batch(
         if !allow_negative_offset && offset < 0.0 {
             offset = 0.0;
         }
-        info!("Submitting sells at offset: {:.3} in % at offset: {:.3}%", offset, 100.0*offset/mid_price);
+        info!("Submitting sells at offset: {:.5} in % at offset: {:.5}%", offset, 100.0*offset/mid_price);
         for i in 0..=num_levels-1 {
             let mut price = sell_side_ref_price + offset + (i as f64 * step);
             if vega_best_ask > 0.0 {
@@ -455,7 +497,7 @@ fn get_batch(
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
             let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, sell_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
-            info!("ref: {}, order: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+            info!("ref: {}, order: sell {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (sell_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
@@ -489,7 +531,7 @@ fn get_batch(
         price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size_f = get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
-        info!("mid: {}, order: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}", 
+        info!("mid: {}, order: sell {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (sell_side_ref_price.clone().to_f64().unwrap()), 
                         size_f, 
                         price, 
@@ -519,7 +561,7 @@ fn get_batch(
         price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
-        info!("To reduce short position: buy {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
+        info!("To reduce short position: buy {:.4} @ {:.5}, at position and price decimals: {} @ {}",  
                         size_f, 
                         price, 
                         size, 
@@ -546,7 +588,7 @@ fn get_batch(
         price_sub -= price_sub % ((tick * d.price_factor) as i64);
         let size = 1 as u64;
         let size_f = size as f64 / d.position_factor;
-        info!("To reduce long position: sell {:.4} @ {:.3}, at position and price decimals: {} @ {}",  
+        info!("To reduce long position: sell {:.4} @ {:.5}, at position and price decimals: {} @ {}",  
                         size_f, 
                         price, 
                         size, 
@@ -649,8 +691,14 @@ fn get_order_size_mm_quadratic(
 }
 
 
+pub enum MarketAsset { 
+    Future(String),
+    // base first, quote second
+    Spot(String, String),
+    Perpetual(String),
+}
 
-pub fn get_asset(mkt: &Market) -> String {
+pub fn get_asset(mkt: &Market) -> MarketAsset {
     match mkt
         .clone()
         .tradable_instrument
@@ -660,9 +708,9 @@ pub fn get_asset(mkt: &Market) -> String {
         .product
         .unwrap()
     {
-        Product::Future(f) => f.settlement_asset,
-        Product::Spot(_) => unimplemented!("spot market not supported"),
-        Product::Perpetual(f) => f.settlement_asset,
+        Product::Future(f) => MarketAsset::Future(f.settlement_asset),
+        Product::Spot(s) => MarketAsset::Spot(s.base_asset, s.quote_asset),
+        Product::Perpetual(p) => MarketAsset::Perpetual(p.settlement_asset),
     }
 }
 
