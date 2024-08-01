@@ -151,8 +151,8 @@ async fn run_strategy(
     info!(
         "new Vega reference prices: bestBid({}), bestAsk({})", vega_best_bid, vega_best_ask);
 
-    let used_ask: u64;
-    let used_bid: u64;
+    let mut used_ask: u64;
+    let mut used_bid: u64;
     if c.use_vega_bidask && c.use_binance_bidask {
         // best ask we take the bigger one
         used_ask = std::cmp::max(binance_best_ask, vega_best_ask);
@@ -176,6 +176,12 @@ async fn run_strategy(
         info!("reference price are not up to date yet");
         return;
     }
+
+    if c.ref_price_scaling != 1.0 {
+        used_bid = ((used_bid as f64) * c.ref_price_scaling) as u64;
+        used_ask = ((used_ask as f64) * c.ref_price_scaling) as u64;
+    }
+
     info!(
         "reference prices to use: bid: {}, ask: {}", used_bid, used_ask);
     
