@@ -276,6 +276,7 @@ async fn update_position_forever(
         .observe_positions(ObservePositionsRequest {
             party_id: Some(pubkey),
             market_id: Some(market),
+            include_derived_parties: Some(false),
         })
         .await
     {
