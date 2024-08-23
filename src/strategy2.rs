@@ -628,6 +628,7 @@ fn get_batch(
         submissions: orders,
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
+        update_margin_mode: vec![],
     };
 }
 
@@ -641,6 +642,7 @@ fn get_close_batch(market_id: String) -> BatchMarketInstructions {
         submissions: vec![],
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
+        update_margin_mode: vec![],
     };
 }
 
