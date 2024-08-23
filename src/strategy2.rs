@@ -339,6 +339,7 @@ async fn run_strategy(
             c.step,
             c.tick_size,
             c.volume_of_notional,
+            c.buy_to_sell_ratio,
             &d,
             c.use_mid,
             c.allow_negative_offset,
@@ -376,6 +377,7 @@ fn get_batch(
     step: f64,
     tick: f64,
     volume_of_notional: u64,
+    buy_to_sell_ratio: f64,
     d: &Decimals,
     use_mid: bool,
     allow_negative_offset: bool,
@@ -423,7 +425,7 @@ fn get_batch(
             }
             
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
-            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), buy_side_ref_price);
+            let size_f = buy_to_sell_ratio * get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step,  - ((i as f64 + 1.0) * step), buy_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
             let mut price_sub = (price * d.price_factor) as i64;
             price_sub -= price_sub % ((tick * d.price_factor) as i64);
@@ -460,7 +462,7 @@ fn get_batch(
         
         let mut price_sub = (price * d.price_factor) as i64;
         price_sub -= price_sub % ((tick * d.price_factor) as i64);
-        let size_f = get_order_size_mm(volume_of_notional, 1, price);
+        let size_f = buy_to_sell_ratio * get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
         info!("ref: {}, order: buy {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (buy_side_ref_price.clone().to_f64().unwrap()), 
@@ -501,7 +503,7 @@ fn get_batch(
             let mut price_sub = (price * d.price_factor) as i64;
             price_sub -= price_sub % ((tick * d.price_factor) as i64);
             //let size_f = get_order_size_mm_linear(i, volume_of_notional, num_levels, price);
-            let size_f = get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, sell_side_ref_price);
+            let size_f = (1.0 / buy_to_sell_ratio) * get_order_size_mm_quadratic(i, volume_of_notional, num_levels, step, (i as f64 + 1.0) * step, sell_side_ref_price);
             let size = (size_f * d.position_factor).ceil() as u64;
             info!("ref: {}, order: sell {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (sell_side_ref_price.clone().to_f64().unwrap()), 
@@ -535,7 +537,7 @@ fn get_batch(
         
         let mut price_sub = (price * d.price_factor) as i64;
         price_sub -= price_sub % ((tick * d.price_factor) as i64);
-        let size_f = get_order_size_mm(volume_of_notional, 1, price);
+        let size_f = (1.0 / buy_to_sell_ratio) * get_order_size_mm(volume_of_notional, 1, price);
         let size = (size_f * d.position_factor).ceil() as u64;
         info!("mid: {}, order: sell {:.4} @ {:.5}, at position and price decimals: {} @ {}", 
                         (sell_side_ref_price.clone().to_f64().unwrap()), 
