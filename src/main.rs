@@ -54,6 +54,7 @@ struct Config {
     bond_amount: u64,
     lp_fee_bid: f64,
     volume_of_notional: u64,
+    buy_to_sell_ratio: f64,
     levels: u64,
     step: f64,
     tick_size: f64,
@@ -80,6 +81,10 @@ struct Config {
 }
 
 fn config_validation(c: Config) {
+   if c.buy_to_sell_ratio < 1e-8 {
+        panic!("buy to sell ratio must be >= 1e-8"); 
+   }
+   
    if c.binance_price_scaling < 0.0 {
         panic!("binance price scaling must be >= 0.0"); 
    }
