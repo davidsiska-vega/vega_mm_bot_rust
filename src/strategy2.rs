@@ -50,6 +50,8 @@ pub async fn start(
     store: Arc<Mutex<VegaStore>>,
     binance_rp: Arc<Mutex<RefPrice>>,
     bybit_rp: Arc<Mutex<RefPrice>>,
+    old_rp: Arc<Mutex<RefPrice>>,
+    skip_counter: Arc<Mutex<u64>>,
 ) {
     // just loop forever, waiting for user interupt
     info!(
@@ -96,6 +98,8 @@ pub async fn start(
                     store.clone(), 
                     binance_rp.clone(),
                     bybit_rp.clone(),
+                    old_rp.clone(),
+                    skip_counter.clone(),
                 ).await;
             }
         }
@@ -108,6 +112,8 @@ async fn run_strategy(
     store: Arc<Mutex<VegaStore>>,
     binance_rp: Arc<Mutex<RefPrice>>,
     bybit_rp: Arc<Mutex<RefPrice>>,
+    old_rp: Arc<Mutex<RefPrice>>,
+    skip_counter: Arc<Mutex<u64>>,
 ) {
     if c.q_lower >= c.q_upper {
         panic!("we need q_lower < q_upper");
@@ -227,6 +233,25 @@ async fn run_strategy(
     info!(
         "reference prices to use: bid: {}, ask: {}", used_bid, used_ask);
     
+    // check if reference price changed store reference price 
+    let (old_ref_bid_f, old_ref_ask_f) = old_rp.lock().unwrap().get();
+    let old_ref_bid = (old_ref_bid_f * d.price_factor) as u64;
+    let old_ref_ask = (old_ref_ask_f * d.price_factor) as u64;
+    
+    let mut skip_counter_u = *skip_counter.lock().unwrap();
+
+    // if the reference price hasn't updated (and not enough time has passed) then don't want to submit anything
+    if used_bid == old_ref_bid  && used_ask == old_ref_ask && skip_counter_u > 0 {
+        info!("same as old ones: bid: {}, ask: {} NOT submitting anything for another {} rounds", 
+            old_ref_bid, old_ref_ask, skip_counter_u);
+        skip_counter_u -= 1;
+        *skip_counter.lock().unwrap() = skip_counter_u;
+        return;
+    }
+
+    // if prices have changed, store the used prices and proceed to build transaction; reset the counter
+    old_rp.lock().unwrap().set(used_bid as f64 / d.price_factor, used_ask as f64 / d.price_factor);
+    *skip_counter.lock().unwrap() = (c.gtt_length as f64 / c.submission_rate) as u64;
 
     let position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
         Some(p) => p.open_volume,

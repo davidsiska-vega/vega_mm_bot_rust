@@ -227,6 +227,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         exit(0);
     }
     else {
+        // keep previous reference price around to avoid sending too many transactions
+        let old_rp = Arc::new(Mutex::new(ref_price::RefPrice::new()));
+        
+        let skip_counter_u = (config.gtt_length as f64 / config.submission_rate) as u64;
+        let skip_counter = Arc::new(Mutex::new(skip_counter_u));
+
+        // mutex store for binance data
         let binance_rp = Arc::new(Mutex::new(ref_price::RefPrice::new()));
         if config.use_binance_bidask {
             tokio::spawn(binance_ws::start(
@@ -236,6 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ));    
         }
 
+        // mutex store for bybit data
         let bybit_rp = Arc::new(Mutex::new(ref_price::RefPrice::new()));
         if config.use_bybit_bidask {
             tokio::spawn(bybit_feed::start(
@@ -253,6 +261,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             vstore.clone(),
             binance_rp.clone(),
             bybit_rp.clone(),
+            old_rp.clone(),
+            skip_counter.clone(),
         ));
 
 
