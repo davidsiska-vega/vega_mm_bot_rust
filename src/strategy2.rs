@@ -251,7 +251,7 @@ async fn run_strategy(
 
     // if prices have changed, store the used prices and proceed to build transaction; reset the counter
     old_rp.lock().unwrap().set(used_bid as f64 / d.price_factor, used_ask as f64 / d.price_factor);
-    *skip_counter.lock().unwrap() = (c.gtt_length as f64 / c.submission_rate) as u64;
+    *skip_counter.lock().unwrap() = (0.5 * c.gtt_length as f64 / c.submission_rate) as u64;
 
     let position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
         Some(p) => p.open_volume,
